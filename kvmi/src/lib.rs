@@ -421,19 +421,6 @@ impl Domain {
         let io_vec: Vec<IoVec<&[u8]>> = vec.iter().map(|i| IoVec::from_slice(&i[..])).collect();
         Self::send_msg(fd, &io_vec[..], Some(Self::KVMI_TIMEOUT))
     }
-    pub async fn send(&mut self, msg: Message) -> Result<Option<Reply>> {
-        use Message::*;
-        match msg {
-            GetMaxGfn | GetVersion | GetVCPUNum => self.send_and_get(msg).await,
-            EventReply(_) => self.send_with(msg).await,
-            PauseAllVCPU => {
-                if self.vcpu_num == 0 {
-                    return Err(Error::from(ErrorKind::NeedVCPUNum));
-                }
-                self.send_and_get(msg).await
-            }
-        }
-    }
     fn send_msg(fd: RawFd, io_vec: &[IoVec<&[u8]>], timeout: Option<Duration>) -> Result<()> {
         // let flags = match MsgFlags::from_bits(libc::MSG_NOSIGNAL) {
         //     Some(f) => f,
@@ -706,6 +693,20 @@ impl Domain {
             }
         };
         (extra, size)
+    }
+
+    pub async fn send(&mut self, msg: Message) -> Result<Option<Reply>> {
+        use Message::*;
+        match msg {
+            GetMaxGfn | GetVersion | GetVCPUNum => self.send_and_get(msg).await,
+            EventReply(_) => self.send_with(msg).await,
+            PauseAllVCPU => {
+                if self.vcpu_num == 0 {
+                    return Err(Error::from(ErrorKind::NeedVCPUNum));
+                }
+                self.send_and_get(msg).await
+            }
+        }
     }
 
     pub fn get_uuid(&self) -> &[u8] {
