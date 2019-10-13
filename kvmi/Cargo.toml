@@ -1,0 +1,23 @@
+[package]
+name = "kvmi"
+version = "0.1.0"
+authors = ["Jinyi Xian <kylerky@live.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+bindgen = "0.51"
+
+[dependencies]
+nix = "0.15"
+exitcode = "1.1"
+log = "0.4"
+mio = "0.6"
+libc = "0.2"
+async-std = "0.99.9"
+futures-preview = {version = "0.3.0-alpha.19"}
+lazy_static = "1.4"
+
+[dev-dependencies]
+env_logger = "0.7"
