@@ -5,7 +5,7 @@ use std::error;
 use std::ffi::{CStr, FromBytesWithNulError};
 use std::fmt::{self, Display, Formatter};
 use std::io;
-use std::marker::{PhantomData, Unpin};
+use std::marker::Unpin;
 use std::mem::{size_of, transmute};
 use std::slice::from_raw_parts;
 use std::str::Utf8Error;
@@ -36,6 +36,9 @@ extern crate lazy_static;
 mod c_ffi;
 use c_ffi::*;
 pub use c_ffi::{HSToWire, KvmiEventCR};
+
+mod utils;
+use utils::*;
 
 type MsgHeader = kvmi_msg_hdr;
 type ErrorCode = kvmi_error_code;
@@ -755,54 +758,6 @@ impl Domain {
 
     pub fn get_name(&self) -> &str {
         &self.name
-    }
-}
-
-struct VecBuf<T> {
-    v: Vec<u8>,
-    _marker: PhantomData<T>,
-}
-
-impl<T> VecBuf<T>
-where
-    T: Sized,
-{
-    fn new() -> Self {
-        let mut v = Vec::with_capacity(size_of::<T>());
-        v.resize(size_of::<T>(), 0u8);
-        Self {
-            v,
-            _marker: PhantomData,
-        }
-    }
-
-    fn new_array(n: usize) -> Self {
-        let sz = size_of::<T>() * n;
-        let mut v = Vec::with_capacity(sz);
-        v.resize(sz, 0u8);
-        Self {
-            v,
-            _marker: PhantomData,
-        }
-    }
-
-    unsafe fn as_mut_type(&mut self) -> &mut T {
-        self.v.as_mut_ptr().cast::<T>().as_mut().unwrap()
-    }
-
-    unsafe fn nth_as_mut_type(&mut self, idx: usize) -> &mut T {
-        self.v
-            .as_mut_ptr()
-            .cast::<T>()
-            .offset(idx as isize)
-            .as_mut()
-            .unwrap()
-    }
-}
-
-impl<T> From<VecBuf<T>> for Vec<u8> {
-    fn from(b: VecBuf<T>) -> Self {
-        b.v
     }
 }
 
