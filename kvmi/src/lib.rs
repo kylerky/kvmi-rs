@@ -49,6 +49,13 @@ pub enum Action {
     Retry = KVMI_EVENT_ACTION_RETRY as u8,
 }
 
+#[repr(u16)]
+#[derive(Debug, Clone, Copy)]
+pub enum EventKind {
+    PF = KVMI_EVENT_PF as u16,
+    CR = KVMI_EVENT_CR as u16,
+}
+
 pub struct DomainBuilder<T> {
     reader: BufReader<T>,
     fd: RawFd,
@@ -508,7 +515,7 @@ impl Domain {
                 self.vcpu_num = result.vcpu_count;
                 Ok(Some(Reply::VCPUNum(result.vcpu_count)))
             }
-            PauseAllVCPU => Ok(None),
+            PauseAllVCPU | ControlEvent(_, _, _) => Ok(None),
             _ => unreachable!(),
         }
     }
@@ -522,6 +529,7 @@ impl Domain {
             GetVersion => (size_of::<kvmi_get_version_reply>(), KVMI_GET_VERSION),
             GetMaxGfn => (size_of::<kvmi_get_max_gfn_reply>(), KVMI_GET_MAX_GFN),
             GetVCPUNum => (size_of::<kvmi_get_guest_info_reply>(), KVMI_GET_GUEST_INFO),
+            ControlEvent(_, _, _) => (0, KVMI_CONTROL_EVENTS),
             PauseAllVCPU => (0, KVMI_CONTROL_CMD_RESPONSE),
             _ => unreachable!(),
         };
@@ -531,6 +539,9 @@ impl Domain {
                 let seq = new_seq();
                 let hdr = Self::get_header(kind as u16, 0, seq);
                 (vec![hdr.into()], seq)
+            }
+            ControlEvent(vcpu, event, enable) => {
+                Self::get_control_events_iov(*vcpu, *event as u16, *enable)
             }
             PauseAllVCPU => Self::get_vcpu_pause_iov(self.vcpu_num),
             _ => unreachable!(),
@@ -545,6 +556,25 @@ impl Domain {
         };
 
         Ok((req, rx, iov))
+    }
+
+    fn get_control_events_iov(vcpu: u16, event: u16, enable: bool) -> (Vec<Vec<u8>>, u32) {
+        let seq = new_seq();
+        let hdr = Self::get_header(
+            KVMI_CONTROL_EVENTS as u16,
+            size_of::<ControlEventsMsg>() as u16,
+            seq,
+        );
+
+        let mut msg = VecBuf::<ControlEventsMsg>::new();
+        unsafe {
+            let typed = msg.as_mut_type();
+            typed.hdr.vcpu = vcpu;
+            typed.cmd.event_id = event;
+            typed.cmd.enable = enable as u8;
+        }
+
+        (vec![hdr.into(), msg.into()], seq)
     }
 
     fn get_vcpu_pause_iov(vcpu_num: u32) -> (Vec<Vec<u8>>, u32) {
@@ -698,7 +728,9 @@ impl Domain {
     pub async fn send(&mut self, msg: Message) -> Result<Option<Reply>> {
         use Message::*;
         match msg {
-            GetMaxGfn | GetVersion | GetVCPUNum => self.send_and_get(msg).await,
+            GetMaxGfn | GetVersion | GetVCPUNum | ControlEvent(_, _, _) => {
+                self.send_and_get(msg).await
+            }
             EventReply(_) => self.send_with(msg).await,
             PauseAllVCPU => {
                 if self.vcpu_num == 0 {
@@ -806,6 +838,10 @@ impl Event {
         &self.extra
     }
 
+    pub fn get_vcpu(&self) -> u16 {
+        self.common.0.vcpu
+    }
+
     pub fn new_reply(
         &self,
         action: Action,
@@ -872,6 +908,7 @@ pub enum Message {
     GetVCPUNum,
     PauseAllVCPU,
     EventReply(EventReplyReq),
+    ControlEvent(u16, EventKind, bool),
 }
 
 unsafe fn boxed_slice_to_type<T, O>(s: Box<[T]>) -> Box<O> {

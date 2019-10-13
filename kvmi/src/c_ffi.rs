@@ -58,6 +58,12 @@ pub struct ControlCmdRespMsg {
     pub cmd: kvmi_control_cmd_response,
 }
 
+#[repr(C)]
+pub struct ControlEventsMsg {
+    pub hdr: kvmi_vcpu_hdr,
+    pub cmd: kvmi_control_events,
+}
+
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct KvmiEvent(pub(super) kvmi_event);
