@@ -75,7 +75,6 @@ where
         let mut reader = self.reader;
         let (name, uuid, start_time) = Self::read_handshake_data(&mut reader).await?;
 
-        // spawn a writer thread
         let fd = self.fd;
 
         let (event_tx, event_rx) = mpsc_fut::channel(5);
