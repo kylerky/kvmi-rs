@@ -85,3 +85,15 @@ pub struct KvmiEventTrap(kvmi_event_trap);
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct KvmiEventDescriptor(kvmi_event_descriptor);
+
+impl KvmiEventCR {
+    pub fn get_cr_num(&self) -> u16 {
+        self.0.cr
+    }
+    pub fn get_old_val(&self) -> u64 {
+        self.0.old_value
+    }
+    pub fn get_new_val(&self) -> u64 {
+        self.0.new_value
+    }
+}

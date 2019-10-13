@@ -34,8 +34,8 @@ use mio::{Events, Poll, PollOpt, Ready, Token};
 extern crate lazy_static;
 
 mod c_ffi;
-pub use c_ffi::HSToWire;
 use c_ffi::*;
+pub use c_ffi::{HSToWire, KvmiEventCR};
 
 type MsgHeader = kvmi_msg_hdr;
 type ErrorCode = kvmi_error_code;
@@ -411,6 +411,10 @@ pub enum EventReplyReqExtra {
 impl EventReplyReqExtra {
     pub fn new_pf_extra() -> Self {
         Self::PF(Box::new(PFReply::default()))
+    }
+
+    pub fn new_cr_extra(cr: u64) -> Self {
+        Self::CR(cr)
     }
 }
 
