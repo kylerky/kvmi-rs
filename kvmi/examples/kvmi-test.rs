@@ -5,6 +5,7 @@ use std::error::Error;
 use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::fs::Permissions;
+use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::process;
 
@@ -12,8 +13,10 @@ use async_std::os::unix::net::UnixListener;
 use async_std::prelude::*;
 use async_std::task;
 
-use kvmi::Message::*;
-use kvmi::{Action, Domain, DomainBuilder, Event, EventExtra, EventReplyReqExtra, HSToWire, Reply};
+use kvmi::message::*;
+use kvmi::{
+    Action, Domain, DomainBuilder, Event, EventExtra, EventKind, HSToWire, PageAccessEntry, Reply,
+};
 
 use ArgsErrorKind::*;
 use ErrorKind::*;
@@ -85,8 +88,9 @@ async fn listen(path: &str) -> Result<i32, ListenError> {
             println!("max gfn: 0x{:x?}", max);
         }
 
+        let mut pf_test_enabled = false;
         while let Some(event) = event_rx.next().await {
-            handle_event(&mut dom, event)
+            handle_event(&mut dom, event, &mut pf_test_enabled)
                 .await
                 .map_err(|e| ListenError::new(HandleEvent, e))?;
         }
@@ -97,27 +101,80 @@ async fn listen(path: &str) -> Result<i32, ListenError> {
     Ok(exitcode::OK)
 }
 
-async fn handle_event(dom: &mut Domain, event: Event) -> Result<Option<Reply>, kvmi::Error> {
+async fn handle_event(
+    dom: &mut Domain,
+    event: Event,
+    pf_test_enabled: &mut bool,
+) -> Result<Option<Reply>, kvmi::Error> {
     use Action::*;
     use EventExtra::*;
 
-    println!("event: {:?}", event);
-
     let extra = event.get_extra();
-    let reply = match extra {
+    match extra {
         PauseVCPU => {
             println!("PauseVCPU event, continuing");
-            event.new_reply(Continue, None)
+            enable_events(dom, event.get_vcpu()).await?;
+            if !*pf_test_enabled {
+                *pf_test_enabled = start_pf_test(dom, &event).await?;
+            }
+            dom.send(CommonEventReply::new(&event, Continue).unwrap())
+                .await
         }
         PF(pf) => {
-            println!("PF event, retrying");
-            println!("PF event: {:?}", pf);
-            event.new_reply(Retry, Some(EventReplyReqExtra::new_pf_extra()))
+            let pf_ref = pf.as_raw_ref();
+            println!(
+                "PF event:\ngva 0x{:x?}\ngpa 0x{:x?}\naccess 0x{:x?}\nvcpu {}",
+                pf_ref.gva,
+                pf_ref.gpa,
+                pf_ref.access,
+                event.get_vcpu()
+            );
+            dom.send(PFEventReply::new(&event, Retry).unwrap()).await
         }
-        _ => event.new_reply(Continue, None),
-    }?;
+        CR(cr) => {
+            if !*pf_test_enabled {
+                let started = start_pf_test(dom, &event).await?;
+                if started {
+                    *pf_test_enabled = true;
+                    // disable CR events when the test is started
+                    dom.send(ControlEvent::new(event.get_vcpu(), EventKind::CR, false))
+                        .await?;
+                }
+            } else {
+                dom.send(ControlEvent::new(event.get_vcpu(), EventKind::CR, false))
+                    .await?;
+            }
 
-    dom.send(EventReply(reply)).await
+            println!("CR event, continuing");
+            dom.send(CREventReply::new(&event, Continue, cr.get_new_val()).unwrap())
+                .await
+        }
+        _ => {
+            return Err(io::Error::new(io::ErrorKind::Other, "unexpected event").into());
+        }
+    }
+}
+
+const PAGE_SIZE: u64 = 4096;
+const TEST_PAGE_NUM: u64 = 40;
+async fn start_pf_test(dom: &mut Domain, event: &Event) -> Result<bool, kvmi::Error> {
+    let cr3 = event.get_arch().sregs.cr3;
+    let pt_addr = cr3 & !0xfff;
+    if pt_addr == 0 {
+        return Ok(false);
+    }
+
+    let mut msg = SetPageAccess::new();
+    for i in 0..TEST_PAGE_NUM {
+        msg.push(
+            PageAccessEntry::new(pt_addr + i * PAGE_SIZE)
+                .set_read()
+                .set_execute(),
+        );
+    }
+    dom.send(msg).await?;
+
+    Ok(true)
 }
 
 async fn pause_vm(dom: &mut Domain) -> Result<(), ListenError> {
@@ -127,10 +184,19 @@ async fn pause_vm(dom: &mut Domain) -> Result<(), ListenError> {
         .map_err(|e| ListenError::new(GetInfo, e))?;
     if let Some(Reply::VCPUNum(num)) = reply {
         println!("vcpu number: {}", num);
+        dom.send(PauseVCPUs::new(num).unwrap())
+            .await
+            .map_err(|e| ListenError::new(PauseVM, e))?;
     }
-    dom.send(PauseAllVCPU)
-        .await
-        .map_err(|e| ListenError::new(PauseVM, e))?;
+    Ok(())
+}
+
+async fn enable_events(dom: &mut Domain, vcpu: u16) -> Result<(), kvmi::Error> {
+    use EventKind::*;
+
+    println!("enabling page fault events");
+    dom.send(ControlEvent::new(vcpu, PF, true)).await?;
+    dom.send(ControlEvent::new(vcpu, CR, true)).await?;
     Ok(())
 }
 
