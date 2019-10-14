@@ -42,7 +42,6 @@ pub union EventReplyExtra {
 pub struct EventReply {
     pub hdr: kvmi_vcpu_hdr,
     pub common: kvmi_event_reply,
-    pub extra: EventReplyExtra,
 }
 
 #[repr(C)]

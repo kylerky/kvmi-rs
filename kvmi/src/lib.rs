@@ -397,24 +397,17 @@ struct Request {
     result: oneshot::Sender<Vec<u8>>,
 }
 
-#[derive(Default)]
-pub struct PFReply {
-    ctx_addr: u64,
-    ctx_size: u32,
-    single_step: u8,
-    rep_complete: u8,
-    ctx_data: Vec<u8>,
-}
+type PFReply = kvmi_event_pf_reply;
 
 pub enum EventReplyReqExtra {
     CR(u64),
     MSR(u64),
-    PF(Box<PFReply>),
+    PF(Option<VecBuf<PFReply>>),
 }
 
 impl EventReplyReqExtra {
     pub fn new_pf_extra() -> Self {
-        Self::PF(Box::new(PFReply::default()))
+        Self::PF(Some(VecBuf::<PFReply>::new()))
     }
 
     pub fn new_cr_extra(cr: u64) -> Self {
@@ -644,20 +637,21 @@ impl Domain {
     }
 
     async fn send_with(&mut self, msg: Message) -> Result<Option<Reply>> {
-        let (vec, kind, seq) = match msg {
+        let (mut vec, kind, seq) = match msg {
             Message::EventReply(reply_req) => {
-                let mut reply_vec = VecBuf::<EventReply>::new();
-                let (size, seq) =
-                    unsafe { Self::get_reply_info(reply_req, reply_vec.as_mut_type()) };
-                let mut reply_vec: Vec<u8> = reply_vec.into();
-                reply_vec.resize(size, 0);
-                (reply_vec, KVMI_EVENT_REPLY, seq)
+                let (reply_iov, seq) = Self::get_reply_info(reply_req);
+                (reply_iov, KVMI_EVENT_REPLY, seq)
             }
             _ => unreachable!(),
         };
-        let hdr = Self::get_header(kind as u16, vec.len() as u16, seq);
+        let hdr = Self::get_header(
+            kind as u16,
+            vec.iter().map(|v| v.len()).sum::<usize>() as u16,
+            seq,
+        );
 
-        let iov: Vec<Vec<u8>> = vec![hdr.into(), vec];
+        let mut iov: Vec<Vec<u8>> = vec![hdr.into()];
+        iov.append(&mut vec);
         Self::request(self.fd, iov).await.map(|_| None)
     }
 
@@ -672,8 +666,8 @@ impl Domain {
         hdr
     }
 
-    fn get_reply_info(reply_req: EventReplyReq, reply: &mut EventReply) -> (usize, u32) {
-        let (vcpu, event, extra, extra_sz, seq, action) = match reply_req {
+    fn get_reply_info(reply_req: EventReplyReq) -> (Vec<Vec<u8>>, u32) {
+        let (vcpu, event, extra, seq, action) = match reply_req {
             EventReplyReq {
                 vcpu,
                 event,
@@ -681,8 +675,8 @@ impl Domain {
                 seq,
                 action,
             } => {
-                let (extra, size) = Self::get_reply_info_extra(req);
-                (vcpu, event, extra, size, seq, action)
+                let extra = Self::get_reply_info_extra(req);
+                (vcpu, event, Some(extra), seq, action)
             }
             EventReplyReq {
                 vcpu,
@@ -690,69 +684,54 @@ impl Domain {
                 extra: None,
                 seq,
                 action,
-            } => {
-                let extra = EventReplyExtra {
-                    cr: kvmi_event_cr_reply { new_val: 0 },
-                };
-                (vcpu, event, extra, 0, seq, action)
-            }
+            } => (vcpu, event, None, seq, action),
         };
 
-        *reply = EventReply {
-            hdr: kvmi_vcpu_hdr {
-                vcpu,
-                padding1: 0,
-                padding2: 0,
-            },
-            common: kvmi_event_reply {
-                action: action as u8,
-                event,
-                padding1: 0,
-                padding2: 0,
-            },
-            extra,
+        let mut reply = VecBuf::<EventReply>::new();
+        unsafe {
+            *reply.as_mut_type() = EventReply {
+                hdr: kvmi_vcpu_hdr {
+                    vcpu,
+                    padding1: 0,
+                    padding2: 0,
+                },
+                common: kvmi_event_reply {
+                    action: action as u8,
+                    event,
+                    padding1: 0,
+                    padding2: 0,
+                },
+            };
+        }
+        let iov = match extra {
+            Some(extra) => vec![reply.into(), extra],
+            None => vec![reply.into()],
         };
-        (
-            extra_sz + size_of::<kvmi_vcpu_hdr>() + size_of::<kvmi_event_reply>(),
-            seq,
-        )
+        (iov, seq)
     }
 
-    fn get_reply_info_extra(req: EventReplyReqExtra) -> (EventReplyExtra, usize) {
+    fn get_reply_info_extra(req: EventReplyReqExtra) -> Vec<u8> {
         use EventReplyReqExtra::*;
-        let (extra, size) = match req {
-            CR(new_val) => (
-                EventReplyExtra {
-                    cr: kvmi_event_cr_reply { new_val },
-                },
-                size_of::<kvmi_event_cr_reply>(),
-            ),
-            MSR(new_val) => (
-                EventReplyExtra {
-                    msr: kvmi_event_msr_reply { new_val },
-                },
-                size_of::<kvmi_event_msr_reply>(),
-            ),
-            PF(reply) => {
-                let mut ctx_data = [0u8; 256];
-                let vec = &reply.ctx_data;
-                ctx_data[..vec.len()].clone_from_slice(&vec[..vec.len()]);
-                (
-                    EventReplyExtra {
-                        pf: kvmi_event_pf_reply {
-                            ctx_addr: reply.ctx_addr,
-                            ctx_size: reply.ctx_size,
-                            singlestep: reply.single_step,
-                            rep_complete: reply.rep_complete,
-                            ctx_data,
-                            padding: 0,
-                        },
-                    },
-                    size_of::<kvmi_event_pf_reply>(),
-                )
+        match req {
+            CR(new_val) => {
+                let mut buf = VecBuf::<kvmi_event_cr_reply>::new();
+                unsafe {
+                    buf.as_mut_type().new_val = new_val;
+                }
+                buf.into()
             }
-        };
-        (extra, size)
+            MSR(new_val) => {
+                let mut buf = VecBuf::<kvmi_event_msr_reply>::new();
+                unsafe {
+                    buf.as_mut_type().new_val = new_val;
+                }
+                buf.into()
+            }
+            PF(mut reply) => {
+                let buf = reply.take().unwrap();
+                buf.into()
+            }
+        }
     }
 
     pub async fn send(&mut self, msg: Message) -> Result<Option<Reply>> {
