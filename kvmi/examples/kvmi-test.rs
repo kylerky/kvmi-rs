@@ -145,7 +145,12 @@ async fn handle_event(
                     .await?;
             }
 
-            println!("CR event, continuing");
+            println!(
+                "CR{} event, old: 0x{:x?}, new: 0x{:x?}, continuing",
+                cr.get_cr_num(),
+                cr.get_old_val(),
+                cr.get_new_val()
+            );
             dom.send(CREventReply::new(&event, Continue, cr.get_new_val()).unwrap())
                 .await
         }
@@ -194,9 +199,13 @@ async fn pause_vm(dom: &mut Domain) -> Result<(), ListenError> {
 async fn enable_events(dom: &mut Domain, vcpu: u16) -> Result<(), kvmi::Error> {
     use EventKind::*;
 
-    println!("enabling page fault events");
+    println!("enabling page fault and CR events");
     dom.send(ControlEvent::new(vcpu, PF, true)).await?;
     dom.send(ControlEvent::new(vcpu, CR, true)).await?;
+    if vcpu == 0 {
+        dom.send(ControlCR::new(vcpu, 3, true)).await?;
+    }
+    dom.send(ControlCR::new(vcpu, 4, true)).await?;
     Ok(())
 }
 
