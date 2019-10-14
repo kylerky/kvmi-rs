@@ -41,6 +41,9 @@ pub use c_ffi::{
 mod utils;
 use utils::*;
 
+pub mod message;
+use message::*;
+
 type MsgHeader = kvmi_msg_hdr;
 type ErrorCode = kvmi_error_code;
 
@@ -108,7 +111,6 @@ where
                 fd,
                 req_tx,
                 deser_handle: Some(deserializer),
-                vcpu_num: 0,
             },
             event_rx,
         ))
@@ -383,44 +385,9 @@ pub struct Domain {
     uuid: [u8; 16],
     start_time: i64,
     name: String,
-    vcpu_num: u32,
     fd: RawFd,
     req_tx: mpsc_fut::Sender<Request>,
     deser_handle: Option<task::JoinHandle<Result<()>>>,
-}
-
-#[derive(Debug)]
-struct Request {
-    size: usize,
-    kind: u16,
-    seq: u32,
-    result: oneshot::Sender<Vec<u8>>,
-}
-
-type PFReply = kvmi_event_pf_reply;
-
-pub enum EventReplyReqExtra {
-    CR(u64),
-    MSR(u64),
-    PF(Option<VecBuf<PFReply>>),
-}
-
-impl EventReplyReqExtra {
-    pub fn new_pf_extra() -> Self {
-        Self::PF(Some(VecBuf::<PFReply>::new()))
-    }
-
-    pub fn new_cr_extra(cr: u64) -> Self {
-        Self::CR(cr)
-    }
-}
-
-pub struct EventReplyReq {
-    vcpu: u16,
-    event: u8,
-    seq: u32,
-    action: Action,
-    extra: Option<EventReplyReqExtra>,
 }
 
 impl Domain {
@@ -481,273 +448,35 @@ impl Domain {
         Ok(())
     }
 
-    async fn send_and_get(&mut self, mut msg: Message) -> Result<Option<Reply>> {
-        use Message::*;
-        let (req, rx, iov) = self.get_req_info(&mut msg)?;
-
-        let req_tx = &mut self.req_tx;
-
-        let result = match req_tx.send(req).await {
-            Ok(_) => {
+    pub async fn send<T>(&mut self, mut msg: T) -> Result<Option<Reply>>
+    where
+        T: Message,
+    {
+        let (req_n_rx, iov) = msg.get_req_info();
+        let result = match req_n_rx {
+            Some((req, rx)) => {
+                let req_tx = &mut self.req_tx;
+                match req_tx.send(req).await {
+                    Ok(_) => {
+                        Self::request(self.fd, iov).await?;
+                        let result = rx.await?;
+                        result.into_boxed_slice()
+                    }
+                    Err(e) => {
+                        error!("unable to send request through the request channel");
+                        if let Some(handle) = self.deser_handle.take() {
+                            handle.await?;
+                        }
+                        return Err(e.into());
+                    }
+                }
+            }
+            None => {
                 Self::request(self.fd, iov).await?;
-                let result = rx.await?;
-                result.into_boxed_slice()
-            }
-            Err(e) => {
-                error!("unable to send request through the request channel");
-                if let Some(handle) = self.deser_handle.take() {
-                    handle.await?;
-                }
-                return Err(e.into());
+                Box::new([])
             }
         };
-
-        match msg {
-            GetVersion => {
-                let result: Box<kvmi_get_version_reply> = unsafe { boxed_slice_to_type(result) };
-                Ok(Some(Reply::Version(result.version)))
-            }
-            GetMaxGfn => {
-                let result: Box<kvmi_get_max_gfn_reply> = unsafe { boxed_slice_to_type(result) };
-                Ok(Some(Reply::MaxGfn(result.gfn)))
-            }
-            GetVCPUNum => {
-                let result: Box<kvmi_get_guest_info_reply> = unsafe { boxed_slice_to_type(result) };
-                self.vcpu_num = result.vcpu_count;
-                Ok(Some(Reply::VCPUNum(result.vcpu_count)))
-            }
-            PauseAllVCPU | ControlEvent(_, _, _) | SetPageAccess(_) => Ok(None),
-            _ => unreachable!(),
-        }
-    }
-
-    fn get_req_info(
-        &self,
-        msg: &mut Message,
-    ) -> Result<(Request, oneshot::Receiver<Vec<u8>>, Vec<Vec<u8>>)> {
-        use Message::*;
-        let (reply_sz, kind) = match msg {
-            GetVersion => (size_of::<kvmi_get_version_reply>(), KVMI_GET_VERSION),
-            GetMaxGfn => (size_of::<kvmi_get_max_gfn_reply>(), KVMI_GET_MAX_GFN),
-            GetVCPUNum => (size_of::<kvmi_get_guest_info_reply>(), KVMI_GET_GUEST_INFO),
-            ControlEvent(_, _, _) => (0, KVMI_CONTROL_EVENTS),
-            PauseAllVCPU => (0, KVMI_CONTROL_CMD_RESPONSE),
-            SetPageAccess(_) => (0, KVMI_SET_PAGE_ACCESS),
-            _ => unreachable!(),
-        };
-
-        let (iov, seq) = match msg {
-            GetVersion | GetMaxGfn | GetVCPUNum => {
-                let seq = new_seq();
-                let hdr = Self::get_header(kind as u16, 0, seq);
-                (vec![hdr.into()], seq)
-            }
-            ControlEvent(vcpu, event, enable) => {
-                Self::get_control_events_iov(*vcpu, *event as u16, *enable)
-            }
-            PauseAllVCPU => Self::get_vcpu_pause_iov(self.vcpu_num),
-            SetPageAccess(entries) => match entries.take() {
-                Some(entries) => Self::get_set_page_access_iov(entries),
-                None => return Err(Error::from(ErrorKind::Parameter)),
-            },
-            _ => unreachable!(),
-        };
-
-        let (tx, rx) = oneshot::channel();
-        let req = Request {
-            size: reply_sz,
-            kind: kind as u16,
-            seq,
-            result: tx,
-        };
-
-        Ok((req, rx, iov))
-    }
-
-    fn get_set_page_access_iov(entries: Vec<PageAccessEntry>) -> (Vec<Vec<u8>>, u32) {
-        let entries_len = entries.len();
-
-        let msg_sz = size_of::<kvmi_set_page_access>() + entries_len * size_of::<PageAccessEntry>();
-        let seq = new_seq();
-        let hdr = Self::get_header(KVMI_SET_PAGE_ACCESS as u16, msg_sz as u16, seq);
-
-        let mut msg = VecBuf::<kvmi_set_page_access>::new();
-        unsafe {
-            let typed = msg.as_mut_type();
-            typed.count = entries_len as u16;
-        }
-
-        let entries = any_vec_as_u8_vec(entries);
-        (vec![hdr.into(), msg.into(), entries], seq)
-    }
-
-    fn get_control_events_iov(vcpu: u16, event: u16, enable: bool) -> (Vec<Vec<u8>>, u32) {
-        let seq = new_seq();
-        let hdr = Self::get_header(
-            KVMI_CONTROL_EVENTS as u16,
-            size_of::<ControlEventsMsg>() as u16,
-            seq,
-        );
-
-        let mut msg = VecBuf::<ControlEventsMsg>::new();
-        unsafe {
-            let typed = msg.as_mut_type();
-            typed.hdr.vcpu = vcpu;
-            typed.cmd.event_id = event;
-            typed.cmd.enable = enable as u8;
-        }
-
-        (vec![hdr.into(), msg.into()], seq)
-    }
-
-    fn get_vcpu_pause_iov(vcpu_num: u32) -> (Vec<Vec<u8>>, u32) {
-        let (prefix, _) = Self::get_control_cmd_response_vec(0, 1);
-
-        let mut pause_msgs = VecBuf::<PauseVCPUMsg>::new_array(vcpu_num as usize);
-        for i in 0..vcpu_num as usize {
-            unsafe {
-                let msg = pause_msgs.nth_as_mut_type(i);
-                msg.hdr.id = KVMI_PAUSE_VCPU as u16;
-                msg.hdr.seq = new_seq();
-                msg.hdr.size = (size_of::<kvmi_vcpu_hdr>() + size_of::<kvmi_pause_vcpu>()) as u16;
-
-                msg.vcpu_hdr.vcpu = i as u16;
-
-                msg.cmd.wait = 1;
-            }
-        }
-
-        let (suffix, seq) = Self::get_control_cmd_response_vec(1, 1);
-
-        (vec![prefix.into(), pause_msgs.into(), suffix.into()], seq)
-    }
-
-    fn get_control_cmd_response_vec(enable: u8, now: u8) -> (VecBuf<ControlCmdRespMsg>, u32) {
-        let seq = new_seq();
-        let mut buf = VecBuf::<ControlCmdRespMsg>::new();
-        unsafe {
-            let msg = buf.as_mut_type();
-            msg.hdr.id = KVMI_CONTROL_CMD_RESPONSE as u16;
-            msg.hdr.seq = seq;
-            msg.hdr.size = size_of::<kvmi_control_cmd_response>() as u16;
-            msg.cmd.enable = enable;
-            msg.cmd.now = now;
-        }
-        (buf, seq)
-    }
-
-    async fn send_with(&mut self, msg: Message) -> Result<Option<Reply>> {
-        let (mut vec, kind, seq) = match msg {
-            Message::EventReply(reply_req) => {
-                let (reply_iov, seq) = Self::get_reply_info(reply_req);
-                (reply_iov, KVMI_EVENT_REPLY, seq)
-            }
-            _ => unreachable!(),
-        };
-        let hdr = Self::get_header(
-            kind as u16,
-            vec.iter().map(|v| v.len()).sum::<usize>() as u16,
-            seq,
-        );
-
-        let mut iov: Vec<Vec<u8>> = vec![hdr.into()];
-        iov.append(&mut vec);
-        Self::request(self.fd, iov).await.map(|_| None)
-    }
-
-    fn get_header(kind: u16, size: u16, seq: u32) -> VecBuf<MsgHeader> {
-        let mut hdr = VecBuf::<MsgHeader>::new();
-        unsafe {
-            let hdr_ref = hdr.as_mut_type();
-            hdr_ref.id = kind;
-            hdr_ref.size = size;
-            hdr_ref.seq = seq;
-        }
-        hdr
-    }
-
-    fn get_reply_info(reply_req: EventReplyReq) -> (Vec<Vec<u8>>, u32) {
-        let (vcpu, event, extra, seq, action) = match reply_req {
-            EventReplyReq {
-                vcpu,
-                event,
-                extra: Some(req),
-                seq,
-                action,
-            } => {
-                let extra = Self::get_reply_info_extra(req);
-                (vcpu, event, Some(extra), seq, action)
-            }
-            EventReplyReq {
-                vcpu,
-                event,
-                extra: None,
-                seq,
-                action,
-            } => (vcpu, event, None, seq, action),
-        };
-
-        let mut reply = VecBuf::<EventReply>::new();
-        unsafe {
-            *reply.as_mut_type() = EventReply {
-                hdr: kvmi_vcpu_hdr {
-                    vcpu,
-                    padding1: 0,
-                    padding2: 0,
-                },
-                common: kvmi_event_reply {
-                    action: action as u8,
-                    event,
-                    padding1: 0,
-                    padding2: 0,
-                },
-            };
-        }
-        let iov = match extra {
-            Some(extra) => vec![reply.into(), extra],
-            None => vec![reply.into()],
-        };
-        (iov, seq)
-    }
-
-    fn get_reply_info_extra(req: EventReplyReqExtra) -> Vec<u8> {
-        use EventReplyReqExtra::*;
-        match req {
-            CR(new_val) => {
-                let mut buf = VecBuf::<kvmi_event_cr_reply>::new();
-                unsafe {
-                    buf.as_mut_type().new_val = new_val;
-                }
-                buf.into()
-            }
-            MSR(new_val) => {
-                let mut buf = VecBuf::<kvmi_event_msr_reply>::new();
-                unsafe {
-                    buf.as_mut_type().new_val = new_val;
-                }
-                buf.into()
-            }
-            PF(mut reply) => {
-                let buf = reply.take().unwrap();
-                buf.into()
-            }
-        }
-    }
-
-    pub async fn send(&mut self, msg: Message) -> Result<Option<Reply>> {
-        use Message::*;
-        match msg {
-            GetMaxGfn | GetVersion | GetVCPUNum | ControlEvent(_, _, _) | SetPageAccess(_) => {
-                self.send_and_get(msg).await
-            }
-            EventReply(_) => self.send_with(msg).await,
-            PauseAllVCPU => {
-                if self.vcpu_num == 0 {
-                    return Err(Error::from(ErrorKind::NeedVCPUNum));
-                }
-                self.send_and_get(msg).await
-            }
-        }
+        Ok(msg.construct_reply(result))
     }
 
     pub fn get_uuid(&self) -> &[u8] {
@@ -802,43 +531,6 @@ impl Event {
     pub fn get_arch(&self) -> kvmi_event_arch {
         self.common.0.arch
     }
-
-    pub fn new_reply(
-        &self,
-        action: Action,
-        extra: Option<EventReplyReqExtra>,
-    ) -> Result<EventReplyReq> {
-        let ok = match self.extra {
-            EventExtra::CR(_) => match extra {
-                Some(EventReplyReqExtra::CR(_)) => true,
-                _ => false,
-            },
-            EventExtra::MSR(_) => match extra {
-                Some(EventReplyReqExtra::MSR(_)) => true,
-                _ => false,
-            },
-            EventExtra::PF(_) => match extra {
-                Some(EventReplyReqExtra::PF(_)) => true,
-                _ => false,
-            },
-            _ => match extra {
-                None => true,
-                _ => false,
-            },
-        };
-
-        if !ok {
-            return Err(Error::from(ErrorKind::MismatchedEventKind));
-        }
-
-        Ok(EventReplyReq {
-            vcpu: self.common.0.vcpu,
-            event: self.common.0.event,
-            seq: self.seq,
-            action,
-            extra,
-        })
-    }
 }
 
 #[derive(Debug)]
@@ -861,16 +553,6 @@ pub enum Reply {
     Version(u32),
     MaxGfn(u64),
     VCPUNum(u32),
-}
-
-pub enum Message {
-    GetVersion,
-    GetMaxGfn,
-    GetVCPUNum,
-    PauseAllVCPU,
-    EventReply(EventReplyReq),
-    ControlEvent(u16, EventKind, bool),
-    SetPageAccess(Option<Vec<PageAccessEntry>>),
 }
 
 unsafe fn boxed_slice_to_type<T, O>(s: Box<[T]>) -> Box<O> {
