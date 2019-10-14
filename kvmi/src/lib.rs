@@ -6,7 +6,7 @@ use std::ffi::{CStr, FromBytesWithNulError};
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::marker::Unpin;
-use std::mem::{size_of, transmute};
+use std::mem::{self, size_of, transmute};
 use std::slice::from_raw_parts;
 use std::str::Utf8Error;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -487,9 +487,9 @@ impl Domain {
         Ok(())
     }
 
-    async fn send_and_get(&mut self, msg: Message) -> Result<Option<Reply>> {
+    async fn send_and_get(&mut self, mut msg: Message) -> Result<Option<Reply>> {
         use Message::*;
-        let (req, rx, iov) = self.get_req_info(&msg)?;
+        let (req, rx, iov) = self.get_req_info(&mut msg)?;
 
         let req_tx = &mut self.req_tx;
 
@@ -522,14 +522,14 @@ impl Domain {
                 self.vcpu_num = result.vcpu_count;
                 Ok(Some(Reply::VCPUNum(result.vcpu_count)))
             }
-            PauseAllVCPU | ControlEvent(_, _, _) => Ok(None),
+            PauseAllVCPU | ControlEvent(_, _, _) | SetPageAccess(_) => Ok(None),
             _ => unreachable!(),
         }
     }
 
     fn get_req_info(
         &self,
-        msg: &Message,
+        msg: &mut Message,
     ) -> Result<(Request, oneshot::Receiver<Vec<u8>>, Vec<Vec<u8>>)> {
         use Message::*;
         let (reply_sz, kind) = match msg {
@@ -538,6 +538,7 @@ impl Domain {
             GetVCPUNum => (size_of::<kvmi_get_guest_info_reply>(), KVMI_GET_GUEST_INFO),
             ControlEvent(_, _, _) => (0, KVMI_CONTROL_EVENTS),
             PauseAllVCPU => (0, KVMI_CONTROL_CMD_RESPONSE),
+            SetPageAccess(_) => (0, KVMI_SET_PAGE_ACCESS),
             _ => unreachable!(),
         };
 
@@ -551,6 +552,10 @@ impl Domain {
                 Self::get_control_events_iov(*vcpu, *event as u16, *enable)
             }
             PauseAllVCPU => Self::get_vcpu_pause_iov(self.vcpu_num),
+            SetPageAccess(entries) => match entries.take() {
+                Some(entries) => Self::get_set_page_access_iov(entries),
+                None => return Err(Error::from(ErrorKind::Parameter)),
+            },
             _ => unreachable!(),
         };
 
@@ -563,6 +568,32 @@ impl Domain {
         };
 
         Ok((req, rx, iov))
+    }
+
+    fn get_set_page_access_iov(mut entries: Vec<PageAccessEntry>) -> (Vec<Vec<u8>>, u32) {
+        let entries_len = entries.len();
+        let entry_sz = size_of::<PageAccessEntry>();
+
+        let msg_sz = size_of::<kvmi_set_page_access>() + entries_len * size_of::<PageAccessEntry>();
+        let seq = new_seq();
+        let hdr = Self::get_header(KVMI_SET_PAGE_ACCESS as u16, msg_sz as u16, seq);
+
+        let mut msg = VecBuf::<kvmi_set_page_access>::new();
+        unsafe {
+            let typed = msg.as_mut_type();
+            typed.count = entries_len as u16;
+        }
+
+        let entries = unsafe {
+            let ptr = entries.as_mut_ptr();
+            let len = entries.len();
+            let cap = entries.capacity();
+
+            mem::forget(entries);
+
+            Vec::from_raw_parts(ptr as *mut u8, len * entry_sz, cap * entry_sz)
+        };
+        (vec![hdr.into(), msg.into(), entries], seq)
     }
 
     fn get_control_events_iov(vcpu: u16, event: u16, enable: bool) -> (Vec<Vec<u8>>, u32) {
@@ -735,7 +766,7 @@ impl Domain {
     pub async fn send(&mut self, msg: Message) -> Result<Option<Reply>> {
         use Message::*;
         match msg {
-            GetMaxGfn | GetVersion | GetVCPUNum | ControlEvent(_, _, _) => {
+            GetMaxGfn | GetVersion | GetVCPUNum | ControlEvent(_, _, _) | SetPageAccess(_) => {
                 self.send_and_get(msg).await
             }
             EventReply(_) => self.send_with(msg).await,
@@ -868,6 +899,7 @@ pub enum Message {
     PauseAllVCPU,
     EventReply(EventReplyReq),
     ControlEvent(u16, EventKind, bool),
+    SetPageAccess(Option<Vec<PageAccessEntry>>),
 }
 
 unsafe fn boxed_slice_to_type<T, O>(s: Box<[T]>) -> Box<O> {
@@ -908,6 +940,7 @@ pub enum ErrorKind {
     InvalidPath,
     UnknownKVMIEvent,
     NeedVCPUNum,
+    Parameter,
     MismatchedEventKind,
 }
 
@@ -934,6 +967,7 @@ impl Display for Error {
                 ErrorKind::FlagNSig => write!(f, "cannot set MSG_NOSIGNAL flag"),
                 ErrorKind::UnknownKVMIEvent => write!(f, "unknown KVMI event"),
                 ErrorKind::UnsupportedOp => write!(f, "unsupported operation/command"),
+                ErrorKind::Parameter => write!(f, "wrong parameter"),
                 _ => write!(f, "{:?}", self),
             },
             Repr::IO(e) => write!(f, "failed to do io: {}", e),
