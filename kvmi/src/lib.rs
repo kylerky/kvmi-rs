@@ -6,8 +6,7 @@ use std::ffi::{CStr, FromBytesWithNulError};
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::marker::Unpin;
-use std::mem::{self, size_of, transmute};
-use std::slice::from_raw_parts;
+use std::mem::{size_of, transmute};
 use std::str::Utf8Error;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -572,9 +571,8 @@ impl Domain {
         Ok((req, rx, iov))
     }
 
-    fn get_set_page_access_iov(mut entries: Vec<PageAccessEntry>) -> (Vec<Vec<u8>>, u32) {
+    fn get_set_page_access_iov(entries: Vec<PageAccessEntry>) -> (Vec<Vec<u8>>, u32) {
         let entries_len = entries.len();
-        let entry_sz = size_of::<PageAccessEntry>();
 
         let msg_sz = size_of::<kvmi_set_page_access>() + entries_len * size_of::<PageAccessEntry>();
         let seq = new_seq();
@@ -586,15 +584,7 @@ impl Domain {
             typed.count = entries_len as u16;
         }
 
-        let entries = unsafe {
-            let ptr = entries.as_mut_ptr();
-            let len = entries.len();
-            let cap = entries.capacity();
-
-            mem::forget(entries);
-
-            Vec::from_raw_parts(ptr as *mut u8, len * entry_sz, cap * entry_sz)
-        };
+        let entries = any_vec_as_u8_vec(entries);
         (vec![hdr.into(), msg.into(), entries], seq)
     }
 
@@ -812,10 +802,6 @@ lazy_static! {
     .iter()
     .copied()
     .collect();
-}
-
-unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-    from_raw_parts((p as *const T) as *const u8, size_of::<T>())
 }
 
 #[derive(Debug)]
