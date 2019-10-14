@@ -86,6 +86,12 @@ pub struct KvmiEventTrap(kvmi_event_trap);
 #[repr(transparent)]
 pub struct KvmiEventDescriptor(kvmi_event_descriptor);
 
+impl KvmiEventPF {
+    pub fn as_raw_ref(&self) -> &kvmi_event_pf {
+        &self.0
+    }
+}
+
 impl KvmiEventCR {
     pub fn get_cr_num(&self) -> u16 {
         self.0.cr

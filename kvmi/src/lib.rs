@@ -35,7 +35,9 @@ extern crate lazy_static;
 
 mod c_ffi;
 use c_ffi::*;
-pub use c_ffi::{HSToWire, KvmiEventCR};
+pub use c_ffi::{
+    kvmi_event_arch, kvmi_event_pf, HSToWire, KvmiEventCR, KvmiEventPF, PageAccessEntry,
+};
 
 mod utils;
 use utils::*;
@@ -830,6 +832,10 @@ impl Event {
 
     pub fn get_vcpu(&self) -> u16 {
         self.common.0.vcpu
+    }
+
+    pub fn get_arch(&self) -> kvmi_event_arch {
+        self.common.0.arch
     }
 
     pub fn new_reply(

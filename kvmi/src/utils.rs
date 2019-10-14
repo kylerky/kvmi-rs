@@ -48,4 +48,3 @@ impl<T> From<VecBuf<T>> for Vec<u8> {
         b.v
     }
 }
-
