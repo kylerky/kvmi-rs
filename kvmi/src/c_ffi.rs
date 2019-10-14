@@ -97,3 +97,32 @@ impl KvmiEventCR {
         self.0.new_value
     }
 }
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct PageAccessEntry(kvmi_page_access_entry);
+
+impl PageAccessEntry {
+    pub fn new(gpa: u64) -> Self {
+        Self(kvmi_page_access_entry {
+            gpa,
+            access: 0,
+            padding1: 0,
+            padding2: 0,
+            padding3: 0,
+        })
+    }
+
+    pub fn set_write(mut self) -> Self {
+        self.0.access |= KVMI_PAGE_ACCESS_W as u8;
+        self
+    }
+    pub fn set_read(mut self) -> Self {
+        self.0.access |= KVMI_PAGE_ACCESS_R as u8;
+        self
+    }
+    pub fn set_execute(mut self) -> Self {
+        self.0.access |= KVMI_PAGE_ACCESS_X as u8;
+        self
+    }
+}
