@@ -145,6 +145,39 @@ impl ControlEvent {
     }
 }
 
+pub struct ControlCR {
+    vcpu: u16,
+    cr: u32,
+    enable: bool,
+}
+impl Message for ControlCR {}
+impl Msg for ControlCR {
+    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+        let seq = new_seq();
+        let kind = KVMI_CONTROL_CR as u16;
+        let hdr = get_header(kind, size_of::<ControlCRMsg>() as u16, seq);
+
+        let mut msg = VecBuf::<ControlCRMsg>::new();
+        unsafe {
+            let typed = msg.as_mut_type();
+            typed.hdr.vcpu = self.vcpu;
+            typed.cmd.cr = self.cr;
+            typed.cmd.enable = self.enable as u8;
+        }
+
+        let req_n_rx = get_request(kind, 0, seq);
+        (Some(req_n_rx), vec![hdr.into(), msg.into()])
+    }
+    fn construct_reply(&self, _result: Box<[u8]>) -> Option<Reply> {
+        None
+    }
+}
+impl ControlCR {
+    pub fn new(vcpu: u16, cr: u32, enable: bool) -> Self {
+        Self { vcpu, cr, enable }
+    }
+}
+
 pub struct PauseVCPUs {
     num: u32,
 }
