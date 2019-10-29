@@ -251,14 +251,19 @@ impl Msg for SetPageAccess {
 }
 impl SetPageAccess {
     pub fn new() -> Self {
-        Self {
-            entries: Some(vec![]),
-        }
+        Self::default()
     }
 
     pub fn push(&mut self, entry: PageAccessEntry) {
         if let Some(entries) = self.entries.as_mut() {
             entries.push(entry);
+        }
+    }
+}
+impl Default for SetPageAccess {
+    fn default() -> Self {
+        Self {
+            entries: Some(vec![]),
         }
     }
 }

@@ -22,20 +22,18 @@ pub struct HSToWire {
     pub cookie_hash: [u8; 20],
 }
 
-impl HSToWire {
-    pub fn new() -> Self {
+impl Default for HSToWire {
+    fn default() -> Self {
         HSToWire {
             size: size_of::<HSToWire>() as u32,
             cookie_hash: [0u8; 20],
         }
     }
 }
-
-#[repr(C)]
-pub union EventReplyExtra {
-    pub cr: kvmi_event_cr_reply,
-    pub msr: kvmi_event_msr_reply,
-    pub pf: kvmi_event_pf_reply,
+impl HSToWire {
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 #[repr(C)]

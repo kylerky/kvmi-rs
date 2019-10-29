@@ -7,19 +7,23 @@ pub struct VecBuf<T> {
     _marker: PhantomData<T>,
 }
 
-impl<T> VecBuf<T>
-where
-    T: Sized,
-{
-    pub fn new() -> Self {
-        let mut v = Vec::with_capacity(size_of::<T>());
-        v.resize(size_of::<T>(), 0u8);
+impl<T> Default for VecBuf<T> {
+    fn default() -> Self {
+        let v = vec![0u8; size_of::<T>()];
         Self {
             v,
             _marker: PhantomData,
         }
     }
+}
 
+impl<T> VecBuf<T>
+where
+    T: Sized,
+{
+    pub fn new() -> Self {
+        Self::default()
+    }
     pub fn new_array(n: usize) -> Self {
         let sz = size_of::<T>() * n;
         let mut v = Vec::with_capacity(sz);
@@ -50,6 +54,10 @@ impl<T> From<VecBuf<T>> for Vec<u8> {
     }
 }
 
+/// # Safety
+///
+/// This function should be safe
+/// to be called on any reference to a sized type.
 pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
     from_raw_parts((p as *const T) as *const u8, size_of::<T>())
 }
