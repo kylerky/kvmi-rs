@@ -1,6 +1,7 @@
+use super::ReqHandle;
 use crate::*;
 pub trait Msg {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>);
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>);
     fn construct_reply(&self, result: Vec<u8>) -> Option<Reply>;
 }
 

@@ -180,8 +180,8 @@ where
         loop {
             let header = Self::recv_header(&mut reader).await?;
             match header.id as u32 {
-                KVMI_EVENT => Self::recv_event(&mut reader, &mut event_tx, &header).await?,
-                _ => Self::recv_reply(&mut reader, &mut req_rx, &header).await?,
+                KVMI_EVENT => Self::recv_event(&mut reader, &mut event_tx, header).await?,
+                _ => Self::recv_reply(&mut reader, &mut req_rx, header).await?,
             }
         }
     }
@@ -189,7 +189,7 @@ where
     async fn recv_reply(
         mut reader: &mut BufReader<T>,
         req_rx: &mut mpsc_fut::Receiver<Request>,
-        header: &MsgHeader,
+        header: MsgHeader,
     ) -> Result<()> {
         let req = match req_rx.next().await {
             None => {
@@ -230,7 +230,7 @@ where
     async fn recv_event(
         reader: &mut BufReader<T>,
         event_tx: &mut mpsc_fut::Sender<Event>,
-        header: &MsgHeader,
+        header: MsgHeader,
     ) -> Result<()> {
         if header.size as usize > Self::KVMI_MSG_SZ {
             return Err(io::Error::new(
@@ -240,17 +240,13 @@ where
             .into());
         }
 
-        let mut buffer = Vec::with_capacity(header.size as usize);
-        buffer.resize(header.size as usize, 0u8);
+        let mut buffer = vec![0; header.size as usize];
         reader.read_exact(&mut buffer[..]).await?;
 
         let event = Self::construct_event(buffer, header.seq)?;
-        match event_tx.send(event).await {
-            Err(e) => {
-                error!("failed to send result through event channel");
-                return Err(e.into());
-            }
-            _ => (),
+        if let Err(e) = event_tx.send(event).await {
+            error!("failed to send result through event channel");
+            return Err(e.into());
         }
 
         Ok(())
@@ -300,8 +296,7 @@ where
 
     fn get_extra(useful: usize, sz: usize, rest: &[u8], common: &KvmiEvent) -> Result<EventExtra> {
         let details = {
-            let mut buf = Vec::with_capacity(sz);
-            buf.resize(sz, 0u8);
+            let buf = vec![0; sz];
             let mut buf = buf.into_boxed_slice();
             buf[..useful].clone_from_slice(&rest[..useful]);
             buf
@@ -364,8 +359,7 @@ where
         size: u16,
         type_size: usize,
     ) -> Result<(Vec<u8>, usize)> {
-        let mut buffer = Vec::with_capacity(type_size);
-        buffer.resize(type_size, 0);
+        let mut buffer = vec![0; type_size];
 
         let actual_sz = cmp::min(size as usize, type_size);
         reader.read_exact(&mut buffer[..actual_sz]).await?;
@@ -699,7 +693,7 @@ impl From<oneshot::Canceled> for Error {
 }
 
 impl ErrorCode {
-    pub fn as_os_error(&self) -> libc::c_int {
+    pub fn as_os_error(self) -> libc::c_int {
         match (-self.err) as u32 {
             KVM_ENOSYS => libc::ENOSYS,
             KVM_EFAULT => libc::EFAULT,

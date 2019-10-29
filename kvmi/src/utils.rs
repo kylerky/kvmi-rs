@@ -26,8 +26,7 @@ where
     }
     pub fn new_array(n: usize) -> Self {
         let sz = size_of::<T>() * n;
-        let mut v = Vec::with_capacity(sz);
-        v.resize(sz, 0u8);
+        let v = vec![0u8; sz];
         Self {
             v,
             _marker: PhantomData,
@@ -39,12 +38,7 @@ where
     }
 
     pub unsafe fn nth_as_mut_type(&mut self, idx: usize) -> &mut T {
-        self.v
-            .as_mut_ptr()
-            .cast::<T>()
-            .offset(idx as isize)
-            .as_mut()
-            .unwrap()
+        self.v.as_mut_ptr().cast::<T>().add(idx).as_mut().unwrap()
     }
 }
 

@@ -6,7 +6,9 @@ mod opaque;
 
 pub trait Message: Msg {}
 
-fn get_request(kind: u16, size: usize, seq: u32) -> (Request, oneshot::Receiver<Vec<u8>>) {
+type ReqHandle = (Request, oneshot::Receiver<Vec<u8>>);
+
+fn get_request(kind: u16, size: usize, seq: u32) -> ReqHandle {
     let (tx, rx) = oneshot::channel();
     (
         Request {
@@ -30,10 +32,11 @@ fn get_header(kind: u16, size: u16, seq: u32) -> VecBuf<MsgHeader> {
     hdr
 }
 
+#[derive(Default)]
 pub struct GetMaxGfn;
 impl Message for GetMaxGfn {}
 impl Msg for GetMaxGfn {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
         let kind = KVMI_GET_MAX_GFN as u16;
         let hdr = get_header(kind, 0, seq);
@@ -41,20 +44,17 @@ impl Msg for GetMaxGfn {
         (Some(req_n_rx), vec![hdr.into()])
     }
     fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
-        let result: Box<kvmi_get_max_gfn_reply> = unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
+        let result: Box<kvmi_get_max_gfn_reply> =
+            unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
         Some(Reply::MaxGfn(result.gfn))
     }
 }
-impl GetMaxGfn {
-    pub fn new() -> Self {
-        Self
-    }
-}
 
+#[derive(Default)]
 pub struct GetVersion;
 impl Message for GetVersion {}
 impl Msg for GetVersion {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
         let kind = KVMI_GET_VERSION as u16;
         let hdr = get_header(kind, 0, seq);
@@ -62,20 +62,17 @@ impl Msg for GetVersion {
         (Some(req_n_rx), vec![hdr.into()])
     }
     fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
-        let result: Box<kvmi_get_version_reply> = unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
+        let result: Box<kvmi_get_version_reply> =
+            unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
         Some(Reply::Version(result.version))
     }
 }
-impl GetVersion {
-    pub fn new() -> Self {
-        Self
-    }
-}
 
+#[derive(Default)]
 pub struct GetVCPUNum;
 impl Message for GetVCPUNum {}
 impl Msg for GetVCPUNum {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
         let kind = KVMI_GET_GUEST_INFO as u16;
         let hdr = get_header(kind, 0, seq);
@@ -83,7 +80,8 @@ impl Msg for GetVCPUNum {
         (Some(req_n_rx), vec![hdr.into()])
     }
     fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
-        let result: Box<kvmi_get_guest_info_reply> = unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
+        let result: Box<kvmi_get_guest_info_reply> =
+            unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
         Some(Reply::VCPUNum(result.vcpu_count))
     }
 }
@@ -100,7 +98,7 @@ pub struct ControlEvent {
 }
 impl Message for ControlEvent {}
 impl Msg for ControlEvent {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
         let kind = KVMI_CONTROL_EVENTS as u16;
         let hdr = get_header(kind, size_of::<ControlEventsMsg>() as u16, seq);
@@ -137,7 +135,7 @@ pub struct ControlCR {
 }
 impl Message for ControlCR {}
 impl Msg for ControlCR {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
         let kind = KVMI_CONTROL_CR as u16;
         let hdr = get_header(kind, size_of::<ControlCRMsg>() as u16, seq);
@@ -168,7 +166,7 @@ pub struct PauseVCPUs {
 }
 impl Message for PauseVCPUs {}
 impl Msg for PauseVCPUs {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let (prefix, _) = get_control_cmd_response_vec(0, 1);
 
         let vcpu_num = self.num;
@@ -225,7 +223,7 @@ pub struct SetPageAccess {
 }
 impl Message for SetPageAccess {}
 impl Msg for SetPageAccess {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_SET_PAGE_ACCESS as u16;
         let entries = self.entries.take().unwrap();
         let entries_len = entries.len();
@@ -274,7 +272,7 @@ pub struct CommonEventReply {
 }
 impl Message for CommonEventReply {}
 impl Msg for CommonEventReply {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_EVENT_REPLY as u16;
         let sz = size_of::<EventReply>() as u16;
         let seq = self.seq;
@@ -317,7 +315,7 @@ pub struct CREventReply {
 }
 impl Message for CREventReply {}
 impl Msg for CREventReply {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_EVENT_REPLY as u16;
         let sz = (size_of::<EventReply>() + size_of::<kvmi_event_cr_reply>()) as u16;
         let hdr = get_header(kind, sz, self.seq);
@@ -361,7 +359,7 @@ pub struct MSREventReply {
 }
 impl Message for MSREventReply {}
 impl Msg for MSREventReply {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_EVENT_REPLY as u16;
         let sz = (size_of::<EventReply>() + size_of::<kvmi_event_msr_reply>()) as u16;
         let hdr = get_header(kind, sz, self.seq);
@@ -405,7 +403,7 @@ pub struct PFEventReply {
 }
 impl Message for PFEventReply {}
 impl Msg for PFEventReply {
-    fn get_req_info(&mut self) -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>) {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_EVENT_REPLY as u16;
         let sz = (size_of::<EventReply>() + size_of::<kvmi_event_pf_reply>()) as u16;
         let hdr = get_header(kind, sz, self.seq);

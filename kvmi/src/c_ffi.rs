@@ -1,11 +1,20 @@
-#![allow(non_camel_case_types)]
-#![allow(non_upper_case_globals)]
-#![allow(non_snake_case)]
-#![allow(unused)]
-
 use std::mem::size_of;
 
-include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+pub use binding::*;
+
+#[allow(non_camel_case_types)]
+#[allow(non_upper_case_globals)]
+#[allow(non_snake_case)]
+#[allow(unused)]
+#[allow(
+    clippy::unreadable_literal,
+    clippy::useless_transmute,
+    clippy::trivially_copy_pass_by_ref,
+    clippy::too_many_arguments
+)]
+mod binding {
+    include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
+}
 
 #[repr(C)]
 pub struct HSFromWire {
