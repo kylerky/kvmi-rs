@@ -1,0 +1,10 @@
+language: rust
+rust:
+  - beta
+before_script:
+  - rustup component add clippy rustfmt
+script:
+  - cargo build --verbose --all
+  - cargo test --verbose --all
+  - cargo clippy --all
+  - cargo fmt --all -- --check
