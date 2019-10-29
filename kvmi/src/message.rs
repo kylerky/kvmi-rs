@@ -2,22 +2,7 @@ use crate::utils::*;
 use crate::*;
 
 pub(super) use opaque::*;
-mod opaque {
-    use crate::*;
-    pub trait Msg {
-        fn get_req_info(&mut self)
-            -> (Option<(Request, oneshot::Receiver<Vec<u8>>)>, Vec<Vec<u8>>);
-        fn construct_reply(&self, result: Box<[u8]>) -> Option<Reply>;
-    }
-
-    #[derive(Debug)]
-    pub struct Request {
-        pub size: usize,
-        pub kind: u16,
-        pub seq: u32,
-        pub result: oneshot::Sender<Vec<u8>>,
-    }
-}
+mod opaque;
 
 pub trait Message: Msg {}
 
@@ -55,8 +40,8 @@ impl Msg for GetMaxGfn {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_max_gfn_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
-    fn construct_reply(&self, result: Box<[u8]>) -> Option<Reply> {
-        let result: Box<kvmi_get_max_gfn_reply> = unsafe { boxed_slice_to_type(result) };
+    fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
+        let result: Box<kvmi_get_max_gfn_reply> = unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
         Some(Reply::MaxGfn(result.gfn))
     }
 }
@@ -76,8 +61,8 @@ impl Msg for GetVersion {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_version_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
-    fn construct_reply(&self, result: Box<[u8]>) -> Option<Reply> {
-        let result: Box<kvmi_get_version_reply> = unsafe { boxed_slice_to_type(result) };
+    fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
+        let result: Box<kvmi_get_version_reply> = unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
         Some(Reply::Version(result.version))
     }
 }
@@ -97,8 +82,8 @@ impl Msg for GetVCPUNum {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_guest_info_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
-    fn construct_reply(&self, result: Box<[u8]>) -> Option<Reply> {
-        let result: Box<kvmi_get_guest_info_reply> = unsafe { boxed_slice_to_type(result) };
+    fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
+        let result: Box<kvmi_get_guest_info_reply> = unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
         Some(Reply::VCPUNum(result.vcpu_count))
     }
 }
@@ -131,7 +116,7 @@ impl Msg for ControlEvent {
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into()])
     }
-    fn construct_reply(&self, _result: Box<[u8]>) -> Option<Reply> {
+    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
         None
     }
 }
@@ -168,7 +153,7 @@ impl Msg for ControlCR {
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into()])
     }
-    fn construct_reply(&self, _result: Box<[u8]>) -> Option<Reply> {
+    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
         None
     }
 }
@@ -209,7 +194,7 @@ impl Msg for PauseVCPUs {
             vec![prefix.into(), pause_msgs.into(), suffix.into()],
         )
     }
-    fn construct_reply(&self, _result: Box<[u8]>) -> Option<Reply> {
+    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
         None
     }
 }
@@ -260,7 +245,7 @@ impl Msg for SetPageAccess {
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into(), entries])
     }
-    fn construct_reply(&self, _result: Box<[u8]>) -> Option<Reply> {
+    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
         None
     }
 }
@@ -291,7 +276,7 @@ impl Msg for CommonEventReply {
         let hdr = get_header(kind, sz, seq);
         (None, vec![hdr.into(), self.buf.take().unwrap().into()])
     }
-    fn construct_reply(&self, _result: Box<[u8]>) -> Option<Reply> {
+    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
         None
     }
 }
@@ -340,7 +325,7 @@ impl Msg for CREventReply {
             ],
         )
     }
-    fn construct_reply(&self, _result: Box<[u8]>) -> Option<Reply> {
+    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
         None
     }
 }
@@ -384,7 +369,7 @@ impl Msg for MSREventReply {
             ],
         )
     }
-    fn construct_reply(&self, _result: Box<[u8]>) -> Option<Reply> {
+    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
         None
     }
 }
@@ -428,7 +413,7 @@ impl Msg for PFEventReply {
             ],
         )
     }
-    fn construct_reply(&self, _result: Box<[u8]>) -> Option<Reply> {
+    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
         None
     }
 }

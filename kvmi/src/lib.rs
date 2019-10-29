@@ -459,8 +459,7 @@ impl Domain {
                 match req_tx.send(req).await {
                     Ok(_) => {
                         Self::request(self.fd, iov).await?;
-                        let result = rx.await?;
-                        result.into_boxed_slice()
+                        rx.await?
                     }
                     Err(e) => {
                         error!("unable to send request through the request channel");
@@ -473,7 +472,7 @@ impl Domain {
             }
             None => {
                 Self::request(self.fd, iov).await?;
-                Box::new([])
+                vec![]
             }
         };
         Ok(msg.construct_reply(result))
