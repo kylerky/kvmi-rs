@@ -1,3 +1,3 @@
 # KVM Introspection
 
-[![Build Status](https://travis-ci.org/kylerky/kvmi-rs.svg?branch=master)](https://travis-ci.org/kylerky/kvmi-rs)
+[![Build Status](https://api.cirrus-ci.com/github/kylerky/kvmi-rs.svg?branch=master)](https://cirrus-ci.com/github/kylerky/kvmi-rs)

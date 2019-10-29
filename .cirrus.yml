@@ -1,0 +1,25 @@
+container:
+  dockerfile: ci/Dockerfile
+
+cargo_cache:
+  folder: $CARGO_HOME/registry
+  fingerprint_script: cat Cargo.lock
+
+before_cache_script: rm -rf $CARGO_HOME/registry/index
+
+
+build_task:
+  build_script: cargo build --verbose --all
+
+task:
+  matrix:
+    - name: test
+      test_script: cargo test --verbose --all
+    - name: format
+      fmt_script: cargo fmt --all -- --check
+    - name: clippy
+      clippy_script: cargo clippy --all
+  depends_on:
+    - build
+    
+
