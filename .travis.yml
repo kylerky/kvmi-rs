@@ -1,10 +1,27 @@
 language: rust
 rust:
   - beta
-before_script:
-  - rustup component add clippy rustfmt
-script:
-  - cargo build --verbose --all
-  - cargo test --verbose --all
-  - cargo clippy --all
-  - cargo fmt --all -- --check
+
+cache: cargo
+
+stages:
+  - build
+  - clippy
+  - test
+  - format
+
+jobs:
+  include:
+    - stage: build
+      script: cargo build --verbose --all
+
+    - stage: clippy
+      before_script: rustup component add clippy
+      script: cargo clippy --all
+
+    - stage: test
+      script: cargo test --verbose --all
+
+    - stage: format
+      before_script: rustup component add rustfmt
+      script: cargo fmt --all -- --check
