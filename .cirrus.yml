@@ -9,7 +9,7 @@ before_cache_script: rm -rf $CARGO_HOME/registry/index
 
 
 build_task:
-  build_script: cargo build --verbose --all
+  build_script: cargo build --examples --verbose --all
 
 task:
   matrix:
@@ -18,7 +18,7 @@ task:
     - name: format
       fmt_script: cargo fmt --all -- --check
     - name: clippy
-      clippy_script: cargo clippy --all
+      clippy_script: cargo clippy --all --all-targets --all-features -- -D warnings
   depends_on:
     - build
     
