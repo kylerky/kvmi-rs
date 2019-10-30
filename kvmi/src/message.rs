@@ -1,3 +1,6 @@
+use log::warn;
+use std::slice;
+
 use crate::utils::*;
 use crate::*;
 
@@ -5,6 +8,9 @@ pub(super) use opaque::*;
 mod opaque;
 
 pub trait Message: Msg {}
+
+#[cfg(test)]
+mod tests;
 
 type ReqHandle = (Request, oneshot::Receiver<Vec<u8>>);
 
@@ -87,7 +93,101 @@ impl Msg for GetVCPUNum {
 }
 impl GetVCPUNum {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct GetRegistersReply {
+    regs: Box<kvmi_get_registers_reply>,
+    msrs: Vec<kvm_msr_entry>,
+}
+impl GetRegistersReply {
+    pub fn get_regs(&self) -> &kvmi_get_registers_reply {
+        &*self.regs
+    }
+
+    pub fn get_msrs(&self) -> &Vec<kvm_msr_entry> {
+        &self.msrs
+    }
+}
+
+pub struct GetRegisters {
+    vcpu: u16,
+    msrs: Option<Vec<u32>>,
+}
+impl Message for GetRegisters {}
+impl Msg for GetRegisters {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
+        let kind = KVMI_GET_REGISTERS as u16;
+
+        let msrs = self.msrs.take().unwrap();
+        let nmsrs = msrs.len();
+        let msg_sz =
+            size_of::<kvmi_vcpu_hdr>() + size_of::<kvmi_get_registers>() + size_of::<u32>() * nmsrs;
+        let seq = new_seq();
+        let hdr = get_header(kind, msg_sz as u16, seq);
+
+        let mut vcpu_msg = VecBuf::<kvmi_vcpu_hdr>::new();
+        unsafe {
+            let typed = vcpu_msg.as_mut_type();
+            typed.vcpu = self.vcpu;
+        }
+
+        let mut reg_msg = VecBuf::<kvmi_get_registers>::new();
+        unsafe {
+            let typed = reg_msg.as_mut_type();
+            typed.nmsrs = nmsrs as u16;
+        }
+
+        let msrs = any_vec_as_u8_vec(msrs);
+
+        let req_n_rx = get_request(
+            kind,
+            size_of::<kvmi_get_registers_reply>() + nmsrs * size_of::<kvm_msr_entry>(),
+            seq,
+        );
+        (
+            Some(req_n_rx),
+            vec![hdr.into(), vcpu_msg.into(), reg_msg.into(), msrs],
+        )
+    }
+    fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
+        let sz = size_of::<kvmi_get_registers_reply>();
+        let mut regs = vec![0u8; sz];
+        regs[..sz].copy_from_slice(&result[..sz]);
+        let regs: Box<kvmi_get_registers_reply> =
+            unsafe { boxed_slice_to_type(regs.into_boxed_slice()) };
+
+        let nmsrs = regs.msrs.nmsrs as usize;
+        let entry_sz = size_of::<kvm_msr_entry>();
+        let len = result.len();
+        let expected = sz + nmsrs * entry_sz;
+        let msrs = if expected == len {
+            let default = kvm_msr_entry {
+                index: 0,
+                reserved: 0,
+                data: 0,
+            };
+
+            let mut msrs = vec![default; nmsrs];
+            let msrs_bytes =
+                unsafe { slice::from_raw_parts_mut(msrs.as_mut_ptr().cast(), nmsrs * entry_sz) };
+            msrs_bytes[..].copy_from_slice(&result[sz..]);
+            msrs
+        } else {
+            warn!("Mismatched KVMI_GET_REGISTERS_REPLY\nExpected: {} Received: {}\nThrowing away MSR data", expected, len);
+            vec![]
+        };
+        Some(Reply::Registers(GetRegistersReply { regs, msrs }))
+    }
+}
+impl GetRegisters {
+    pub fn new(vcpu: u16, msrs: Vec<u32>) -> Self {
+        Self {
+            vcpu,
+            msrs: Some(msrs),
+        }
     }
 }
 

@@ -35,7 +35,8 @@ extern crate lazy_static;
 mod c_ffi;
 use c_ffi::*;
 pub use c_ffi::{
-    kvmi_event_arch, kvmi_event_pf, HSToWire, KvmiEventCR, KvmiEventPF, PageAccessEntry,
+    kvm_msr_entry, kvmi_event_arch, kvmi_event_pf, kvmi_get_registers_reply, HSToWire, KvmiEventCR,
+    KvmiEventPF, PageAccessEntry,
 };
 
 mod utils;
@@ -542,15 +543,12 @@ pub enum EventExtra {
     SingleStep,
 }
 
+#[derive(Debug, PartialEq)]
 pub enum Reply {
     Version(u32),
     MaxGfn(u64),
     VCPUNum(u32),
-}
-
-unsafe fn boxed_slice_to_type<T, O>(s: Box<[T]>) -> Box<O> {
-    let p = Box::into_raw(s) as *mut O;
-    Box::from_raw(p)
+    Registers(GetRegistersReply),
 }
 
 fn new_seq() -> u32 {

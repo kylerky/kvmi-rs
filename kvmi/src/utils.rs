@@ -1,6 +1,6 @@
 use std::marker::PhantomData;
 use std::mem::{self, size_of};
-use std::slice::from_raw_parts;
+use std::slice;
 
 pub struct VecBuf<T> {
     v: Vec<u8>,
@@ -53,7 +53,18 @@ impl<T> From<VecBuf<T>> for Vec<u8> {
 /// This function should be safe
 /// to be called on any reference to a sized type.
 pub unsafe fn any_as_u8_slice<T: Sized>(p: &T) -> &[u8] {
-    from_raw_parts((p as *const T) as *const u8, size_of::<T>())
+    slice::from_raw_parts((p as *const T) as *const u8, size_of::<T>())
+}
+
+#[cfg(test)]
+/// # Safety
+///
+/// This function should be safe
+/// to be called on most reference to a sized type
+/// but it may break gurantees made on the values
+/// of some types.
+pub unsafe fn any_as_mut_u8_slice<T: Sized>(p: &mut T) -> &mut [u8] {
+    slice::from_raw_parts_mut((p as *mut T) as *mut u8, size_of::<T>())
 }
 
 pub fn any_vec_as_u8_vec<T>(mut vec: Vec<T>) -> Vec<u8> {
@@ -67,4 +78,16 @@ pub fn any_vec_as_u8_vec<T>(mut vec: Vec<T>) -> Vec<u8> {
         let t_sz = size_of::<T>();
         Vec::from_raw_parts(ptr as *mut u8, len * t_sz, cap * t_sz)
     }
+}
+
+/// # Safety
+///
+/// O should be sized
+/// and the size of s should be exactly the same as the
+/// size of the intended type
+///
+/// Normally, T is u8
+pub unsafe fn boxed_slice_to_type<T, O>(s: Box<[T]>) -> Box<O> {
+    let p = Box::into_raw(s) as *mut O;
+    Box::from_raw(p)
 }

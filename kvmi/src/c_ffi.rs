@@ -144,3 +144,12 @@ impl PageAccessEntry {
         self
     }
 }
+
+impl PartialEq for kvmi_get_registers_reply {
+    fn eq(&self, other: &Self) -> bool {
+        self.mode == other.mode
+            && self.padding == other.padding
+            && self.regs == other.regs
+            && self.sregs == other.sregs
+    }
+}

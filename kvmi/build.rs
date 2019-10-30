@@ -5,6 +5,8 @@ fn main() {
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
         .clang_arg("-Iinclude")
+        .derive_default(true)
+        .derive_partialeq(true)
         // TODO: need to switch this to
         // .rustified_non_exhaustive_enum(".*")
         // when it is available
