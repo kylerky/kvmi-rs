@@ -56,7 +56,7 @@ async fn listen(path: &str) -> Result<i32, ListenError> {
     fs::set_permissions(path, Permissions::from_mode(0o666))
         .map_err(|e| ListenError::new(Bind, e))?;
 
-    while let Some(stream) = listener.incoming().next().await {
+    if let Some(stream) = listener.incoming().next().await {
         println!("Accepted a new connection");
         let stream = stream.map_err(|e| ListenError::new(Accept, e))?;
 
@@ -154,9 +154,7 @@ async fn handle_event(
             dom.send(CREventReply::new(&event, Continue, cr.get_new_val()).unwrap())
                 .await
         }
-        _ => {
-            return Err(io::Error::new(io::ErrorKind::Other, "unexpected event").into());
-        }
+        _ => Err(io::Error::new(io::ErrorKind::Other, "unexpected event").into()),
     }
 }
 
