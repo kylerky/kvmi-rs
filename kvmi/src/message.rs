@@ -105,12 +105,27 @@ impl GetRegistersReply {
         unsafe { &*self.data.as_ptr().cast() }
     }
 
+    /// # Safety
+    ///
+    /// msrs.nmsrs and msrs.entries should not be mutated.
+    /// Otherwise, it will cause undefined behaviours.
+    pub unsafe fn get_regs_mut(&mut self) -> &mut kvmi_get_registers_reply {
+        &mut *self.data.as_mut_ptr().cast()
+    }
+
     pub fn get_msrs(&self) -> &[kvm_msr_entry] {
         let ptr = self.data.as_ptr().cast::<kvmi_get_registers_reply>();
         unsafe {
             let reply = ptr.as_ref().unwrap();
             let nmsrs = reply.msrs.nmsrs as usize;
             reply.msrs.entries.as_slice(nmsrs)
+        }
+    }
+}
+impl Default for GetRegistersReply {
+    fn default() -> Self {
+        Self {
+            data: vec![0u8; size_of::<kvmi_get_registers_reply>()].into_boxed_slice(),
         }
     }
 }
