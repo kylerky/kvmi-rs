@@ -1,5 +1,4 @@
 use log::warn;
-use std::slice;
 
 use crate::utils::*;
 use crate::*;
@@ -99,16 +98,20 @@ impl GetVCPUNum {
 
 #[derive(Debug, PartialEq)]
 pub struct GetRegistersReply {
-    regs: Box<kvmi_get_registers_reply>,
-    msrs: Vec<kvm_msr_entry>,
+    data: Box<[u8]>,
 }
 impl GetRegistersReply {
     pub fn get_regs(&self) -> &kvmi_get_registers_reply {
-        &*self.regs
+        unsafe { &*self.data.as_ptr().cast() }
     }
 
-    pub fn get_msrs(&self) -> &Vec<kvm_msr_entry> {
-        &self.msrs
+    pub fn get_msrs(&self) -> &[kvm_msr_entry] {
+        let ptr = self.data.as_ptr().cast::<kvmi_get_registers_reply>();
+        unsafe {
+            let reply = ptr.as_ref().unwrap();
+            let nmsrs = reply.msrs.nmsrs as usize;
+            reply.msrs.entries.as_slice(nmsrs)
+        }
     }
 }
 
@@ -152,34 +155,30 @@ impl Msg for GetRegisters {
             vec![hdr.into(), vcpu_msg.into(), reg_msg.into(), msrs],
         )
     }
-    fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
-        let sz = size_of::<kvmi_get_registers_reply>();
-        let mut regs = vec![0u8; sz];
-        regs[..sz].copy_from_slice(&result[..sz]);
-        let regs: Box<kvmi_get_registers_reply> =
-            unsafe { boxed_slice_to_type(regs.into_boxed_slice()) };
+    fn construct_reply(&self, mut result: Vec<u8>) -> Option<Reply> {
+        let ptr = result.as_ptr().cast::<kvmi_get_registers_reply>();
 
-        let nmsrs = regs.msrs.nmsrs as usize;
-        let entry_sz = size_of::<kvm_msr_entry>();
-        let len = result.len();
-        let expected = sz + nmsrs * entry_sz;
-        let msrs = if expected == len {
-            let default = kvm_msr_entry {
-                index: 0,
-                reserved: 0,
-                data: 0,
-            };
-
-            let mut msrs = vec![default; nmsrs];
-            let msrs_bytes =
-                unsafe { slice::from_raw_parts_mut(msrs.as_mut_ptr().cast(), nmsrs * entry_sz) };
-            msrs_bytes[..].copy_from_slice(&result[sz..]);
-            msrs
+        let regs_sz = size_of::<kvmi_get_registers_reply>();
+        let data_len = result.len();
+        if data_len >= regs_sz {
+            let nmsrs = unsafe { ptr.as_ref().unwrap().msrs.nmsrs as usize };
+            let entry_sz = size_of::<kvm_msr_entry>();
+            let expected = regs_sz + nmsrs * entry_sz;
+            if expected != data_len {
+                warn!("Mismatched KVMI_GET_REGISTERS_REPLY\nExpected: {} Received: {}\nThrowing away MSR data", expected, data_len);
+                result.resize(regs_sz, 0u8);
+                let ptr = result.as_mut_ptr().cast::<kvmi_get_registers_reply>();
+                unsafe {
+                    ptr.as_mut().unwrap().msrs.nmsrs = 0;
+                }
+            }
+            Some(Reply::Registers(GetRegistersReply {
+                data: result.into_boxed_slice(),
+            }))
         } else {
-            warn!("Mismatched KVMI_GET_REGISTERS_REPLY\nExpected: {} Received: {}\nThrowing away MSR data", expected, len);
-            vec![]
-        };
-        Some(Reply::Registers(GetRegistersReply { regs, msrs }))
+            warn!("Too little data for KVMI_GET_REGISTERS reply");
+            None
+        }
     }
 }
 impl GetRegisters {
