@@ -1,0 +1,10 @@
+[package]
+name = "kvmi-semantic"
+version = "0.1.0"
+authors = ["Jinyi Xian <kylerky@live.com>"]
+edition = "2018"
+
+[dependencies]
+kvmi = { path = "../kvmi" }
+async-std = "0.99.9"
+futures-preview = {version = "0.3.0-alpha.19"}
