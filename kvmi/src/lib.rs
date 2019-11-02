@@ -443,7 +443,7 @@ impl Domain {
         Ok(())
     }
 
-    pub async fn send<T>(&mut self, mut msg: T) -> Result<Option<Reply>>
+    pub async fn send<T>(&mut self, mut msg: T) -> Result<T::Reply>
     where
         T: Message,
     {
@@ -541,14 +541,6 @@ pub enum EventExtra {
     Unhook,
     XSetBV,
     SingleStep,
-}
-
-#[derive(Debug, PartialEq)]
-pub enum Reply {
-    Version(u32),
-    MaxGfn(u64),
-    VCPUNum(u32),
-    Registers(GetRegistersReply),
 }
 
 fn new_seq() -> u32 {

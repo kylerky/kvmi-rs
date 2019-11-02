@@ -1,8 +1,8 @@
-use super::ReqHandle;
+use super::{Messenger, ReqHandle};
 use crate::*;
-pub trait Msg {
+pub trait Msg: Messenger {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>);
-    fn construct_reply(&self, result: Vec<u8>) -> Option<Reply>;
+    fn construct_reply(&self, result: Vec<u8>) -> Self::Reply;
 }
 
 #[derive(Debug)]

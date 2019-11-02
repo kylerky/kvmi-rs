@@ -40,11 +40,7 @@ fn get_registers_construct_reply() {
 
     result.append(&mut any_vec_as_u8_vec(msrs.clone()));
 
-    let reply = msg.construct_reply(result).expect("Cannot get a reply");
-    if let Reply::Registers(reply) = reply {
-        assert_eq!(expect, *reply.get_regs());
-        assert_eq!(msrs, reply.get_msrs());
-    } else {
-        panic!(format!("Wrong kind of reply: {:#?}", reply));
-    }
+    let reply = msg.construct_reply(result);
+    assert_eq!(expect, *reply.get_regs());
+    assert_eq!(msrs, reply.get_msrs());
 }

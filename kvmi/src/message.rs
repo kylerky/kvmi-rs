@@ -6,6 +6,9 @@ use crate::*;
 pub(super) use opaque::*;
 mod opaque;
 
+pub trait Messenger {
+    type Reply;
+}
 pub trait Message: Msg {}
 
 #[cfg(test)]
@@ -40,6 +43,9 @@ fn get_header(kind: u16, size: u16, seq: u32) -> VecBuf<MsgHeader> {
 #[derive(Default)]
 pub struct GetMaxGfn;
 impl Message for GetMaxGfn {}
+impl Messenger for GetMaxGfn {
+    type Reply = u64;
+}
 impl Msg for GetMaxGfn {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
@@ -48,16 +54,19 @@ impl Msg for GetMaxGfn {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_max_gfn_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
-    fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
+    fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
         let result: Box<kvmi_get_max_gfn_reply> =
             unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
-        Some(Reply::MaxGfn(result.gfn))
+        result.gfn
     }
 }
 
 #[derive(Default)]
 pub struct GetVersion;
 impl Message for GetVersion {}
+impl Messenger for GetVersion {
+    type Reply = u32;
+}
 impl Msg for GetVersion {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
@@ -66,16 +75,19 @@ impl Msg for GetVersion {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_version_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
-    fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
+    fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
         let result: Box<kvmi_get_version_reply> =
             unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
-        Some(Reply::Version(result.version))
+        result.version
     }
 }
 
 #[derive(Default)]
 pub struct GetVCPUNum;
 impl Message for GetVCPUNum {}
+impl Messenger for GetVCPUNum {
+    type Reply = u32;
+}
 impl Msg for GetVCPUNum {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
@@ -84,10 +96,10 @@ impl Msg for GetVCPUNum {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_guest_info_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
-    fn construct_reply(&self, result: Vec<u8>) -> Option<Reply> {
+    fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
         let result: Box<kvmi_get_guest_info_reply> =
             unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
-        Some(Reply::VCPUNum(result.vcpu_count))
+        result.vcpu_count
     }
 }
 impl GetVCPUNum {
@@ -135,6 +147,9 @@ pub struct GetRegisters {
     msrs: Option<Vec<u32>>,
 }
 impl Message for GetRegisters {}
+impl Messenger for GetRegisters {
+    type Reply = GetRegistersReply;
+}
 impl Msg for GetRegisters {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_GET_REGISTERS as u16;
@@ -170,29 +185,24 @@ impl Msg for GetRegisters {
             vec![hdr.into(), vcpu_msg.into(), reg_msg.into(), msrs],
         )
     }
-    fn construct_reply(&self, mut result: Vec<u8>) -> Option<Reply> {
+    fn construct_reply(&self, mut result: Vec<u8>) -> Self::Reply {
         let ptr = result.as_ptr().cast::<kvmi_get_registers_reply>();
 
         let regs_sz = size_of::<kvmi_get_registers_reply>();
         let data_len = result.len();
-        if data_len >= regs_sz {
-            let nmsrs = unsafe { ptr.as_ref().unwrap().msrs.nmsrs as usize };
-            let entry_sz = size_of::<kvm_msr_entry>();
-            let expected = regs_sz + nmsrs * entry_sz;
-            if expected != data_len {
-                warn!("Mismatched KVMI_GET_REGISTERS_REPLY\nExpected: {} Received: {}\nThrowing away MSR data", expected, data_len);
-                result.resize(regs_sz, 0u8);
-                let ptr = result.as_mut_ptr().cast::<kvmi_get_registers_reply>();
-                unsafe {
-                    ptr.as_mut().unwrap().msrs.nmsrs = 0;
-                }
+        let nmsrs = unsafe { ptr.as_ref().unwrap().msrs.nmsrs as usize };
+        let entry_sz = size_of::<kvm_msr_entry>();
+        let expected = regs_sz + nmsrs * entry_sz;
+        if expected != data_len {
+            warn!("Mismatched KVMI_GET_REGISTERS_REPLY\nExpected: {} Received: {}\nThrowing away MSR data", expected, data_len);
+            result.resize(regs_sz, 0u8);
+            let ptr = result.as_mut_ptr().cast::<kvmi_get_registers_reply>();
+            unsafe {
+                ptr.as_mut().unwrap().msrs.nmsrs = 0;
             }
-            Some(Reply::Registers(GetRegistersReply {
-                data: result.into_boxed_slice(),
-            }))
-        } else {
-            warn!("Too little data for KVMI_GET_REGISTERS reply");
-            None
+        }
+        GetRegistersReply {
+            data: result.into_boxed_slice(),
         }
     }
 }
@@ -211,6 +221,9 @@ pub struct ControlEvent {
     enable: bool,
 }
 impl Message for ControlEvent {}
+impl Messenger for ControlEvent {
+    type Reply = ();
+}
 impl Msg for ControlEvent {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
@@ -228,9 +241,7 @@ impl Msg for ControlEvent {
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into()])
     }
-    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
-        None
-    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 impl ControlEvent {
     pub fn new(vcpu: u16, event: EventKind, enable: bool) -> Self {
@@ -248,6 +259,9 @@ pub struct ControlCR {
     enable: bool,
 }
 impl Message for ControlCR {}
+impl Messenger for ControlCR {
+    type Reply = ();
+}
 impl Msg for ControlCR {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
@@ -265,9 +279,7 @@ impl Msg for ControlCR {
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into()])
     }
-    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
-        None
-    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 impl ControlCR {
     pub fn new(vcpu: u16, cr: u32, enable: bool) -> Self {
@@ -279,6 +291,9 @@ pub struct PauseVCPUs {
     num: u32,
 }
 impl Message for PauseVCPUs {}
+impl Messenger for PauseVCPUs {
+    type Reply = ();
+}
 impl Msg for PauseVCPUs {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let (prefix, _) = get_control_cmd_response_vec(0, 1);
@@ -306,9 +321,7 @@ impl Msg for PauseVCPUs {
             vec![prefix.into(), pause_msgs.into(), suffix.into()],
         )
     }
-    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
-        None
-    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 fn get_control_cmd_response_vec(enable: u8, now: u8) -> (VecBuf<ControlCmdRespMsg>, u32) {
     let seq = new_seq();
@@ -336,6 +349,9 @@ pub struct SetPageAccess {
     entries: Option<Vec<PageAccessEntry>>,
 }
 impl Message for SetPageAccess {}
+impl Messenger for SetPageAccess {
+    type Reply = ();
+}
 impl Msg for SetPageAccess {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_SET_PAGE_ACCESS as u16;
@@ -357,9 +373,7 @@ impl Msg for SetPageAccess {
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into(), entries])
     }
-    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
-        None
-    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 impl SetPageAccess {
     pub fn new() -> Self {
@@ -385,6 +399,9 @@ pub struct CommonEventReply {
     seq: u32,
 }
 impl Message for CommonEventReply {}
+impl Messenger for CommonEventReply {
+    type Reply = ();
+}
 impl Msg for CommonEventReply {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_EVENT_REPLY as u16;
@@ -393,9 +410,7 @@ impl Msg for CommonEventReply {
         let hdr = get_header(kind, sz, seq);
         (None, vec![hdr.into(), self.buf.take().unwrap().into()])
     }
-    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
-        None
-    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 impl CommonEventReply {
     pub fn new(event: &Event, action: Action) -> Option<Self> {
@@ -428,6 +443,9 @@ pub struct CREventReply {
     seq: u32,
 }
 impl Message for CREventReply {}
+impl Messenger for CREventReply {
+    type Reply = ();
+}
 impl Msg for CREventReply {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_EVENT_REPLY as u16;
@@ -442,9 +460,7 @@ impl Msg for CREventReply {
             ],
         )
     }
-    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
-        None
-    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 impl CREventReply {
     pub fn new(event: &Event, action: Action, new_val: u64) -> Option<Self> {
@@ -472,6 +488,9 @@ pub struct MSREventReply {
     seq: u32,
 }
 impl Message for MSREventReply {}
+impl Messenger for MSREventReply {
+    type Reply = ();
+}
 impl Msg for MSREventReply {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_EVENT_REPLY as u16;
@@ -486,9 +505,7 @@ impl Msg for MSREventReply {
             ],
         )
     }
-    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
-        None
-    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 impl MSREventReply {
     pub fn new(event: &Event, action: Action, new_val: u64) -> Option<Self> {
@@ -516,6 +533,9 @@ pub struct PFEventReply {
     seq: u32,
 }
 impl Message for PFEventReply {}
+impl Messenger for PFEventReply {
+    type Reply = ();
+}
 impl Msg for PFEventReply {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let kind = KVMI_EVENT_REPLY as u16;
@@ -530,9 +550,7 @@ impl Msg for PFEventReply {
             ],
         )
     }
-    fn construct_reply(&self, _result: Vec<u8>) -> Option<Reply> {
-        None
-    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 impl PFEventReply {
     pub fn new(event: &Event, action: Action) -> Option<Self> {
