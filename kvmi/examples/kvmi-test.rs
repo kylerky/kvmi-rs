@@ -288,11 +288,8 @@ fn parse_args(mut args: Args) -> Result<String, ArgsError> {
     let path = args.nth(1);
     if let Some(path) = path {
         if args.next().is_none() {
-            Ok(path)
-        } else {
-            Err(ArgsError::new(WrongNumber))
+            return Ok(path)
         }
-    } else {
-        Err(ArgsError::new(WrongNumber))
     }
+    Err(ArgsError::new(WrongNumber))
 }
