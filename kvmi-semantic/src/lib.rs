@@ -6,8 +6,10 @@ use async_std::os::unix::io::AsRawFd;
 
 use futures::channel::mpsc as mpsc_fut;
 
-use kvmi::message::GetRegistersReply;
+use kvmi::message::{GetRegisters, GetRegistersReply};
 use kvmi::{DomainBuilder, Event, HSToWire};
+
+use log::info;
 
 pub struct Domain {
     dom: kvmi::Domain,
@@ -28,11 +30,19 @@ impl Domain {
         F: FnOnce(&str, &[u8], i64) -> Option<HSToWire>,
     {
         let dom = DomainBuilder::new(stream);
-        let (dom, event_rx) = dom.handshake(validator).await?;
+        let (mut dom, event_rx) = dom.handshake(validator).await?;
+
+        let msg = GetRegisters::new(0, vec![]);
+        let reply = dom.send(msg).await?;
+
+        let paging = Self::get_paging_mode_from(&reply);
+
+        info!("paging mode: {:?}", paging);
+
         Ok(Self { dom, event_rx })
     }
 
-    fn get_paging_mode_from(reply: GetRegistersReply) -> PageMode {
+    fn get_paging_mode_from(reply: &GetRegistersReply) -> PageMode {
         use PageMode::*;
 
         let regs = reply.get_regs();

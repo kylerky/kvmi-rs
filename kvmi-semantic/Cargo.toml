@@ -8,3 +8,7 @@ edition = "2018"
 kvmi = { path = "../kvmi" }
 async-std = "0.99.9"
 futures-preview = {version = "0.3.0-alpha.19"}
+log = "0.4"
+
+[dev-dependencies]
+pretty_assertions = "0.6"
