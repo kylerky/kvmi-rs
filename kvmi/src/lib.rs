@@ -682,6 +682,26 @@ impl From<oneshot::Canceled> for Error {
     }
 }
 
+impl From<Error> for io::Error {
+    fn from(e: Error) -> Self {
+        use ErrorKind::*;
+        match e.repr {
+            Repr::IO(ref io_err) => io::Error::new(io_err.kind(), e),
+            Repr::Simple(simple) => {
+                let kind = match simple {
+                    UnknownKVMIEvent | Handshake | Handshake2Big | HandshakeNoData => {
+                        io::ErrorKind::InvalidData
+                    }
+                    Parameter => io::ErrorKind::InvalidInput,
+                    _ => io::ErrorKind::Other,
+                };
+                io::Error::new(kind, e)
+            }
+            Repr::Custom(_) => io::Error::new(io::ErrorKind::Other, e),
+        }
+    }
+}
+
 impl ErrorCode {
     pub fn as_os_error(self) -> libc::c_int {
         match (-self.err) as u32 {

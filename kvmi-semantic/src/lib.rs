@@ -11,6 +11,10 @@ use kvmi::{DomainBuilder, Event, HSToWire};
 
 use log::info;
 
+use std::error;
+use std::io;
+use std::fmt::{self, Display, Formatter};
+
 pub struct Domain {
     dom: kvmi::Domain,
     event_rx: mpsc_fut::Receiver<Event>,
@@ -63,5 +67,42 @@ impl Domain {
         }
 
         Other
+    }
+}
+
+impl error::Error for Error {}
+
+#[derive(Debug)]
+pub enum Error {
+    KVMI(kvmi::Error),
+    KernelVAddr,
+    Unsupported,
+}
+
+impl Display for Error {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        use Error::*;
+        match self {
+            KVMI(e) => write!(f, "{}", e),
+            Unsupported => write!(f, "Guest not supported"),
+            KernelVAddr => write!(f, "failed to get the virtual address of the kernel"),
+        }
+    }
+}
+
+impl From<kvmi::Error> for Error {
+    fn from(e: kvmi::Error) -> Self {
+        Error::KVMI(e)
+    }
+}
+
+impl From<Error> for io::Error {
+    fn from(e: Error) -> Self {
+        use Error::*;
+        match e {
+            Unsupported => io::Error::new(io::ErrorKind::Other, e),
+            KernelVAddr => io::Error::new(io::ErrorKind::InvalidData, e),
+            KVMI(kvmi_err) => kvmi_err.into(),
+        }
     }
 }
