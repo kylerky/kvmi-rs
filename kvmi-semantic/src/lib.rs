@@ -9,11 +9,16 @@ use futures::channel::mpsc as mpsc_fut;
 use kvmi::message::{GetRegisters, GetRegistersReply};
 use kvmi::{DomainBuilder, Event, HSToWire};
 
-use log::info;
+use log::{debug, info};
 
+use std::collections::HashMap;
 use std::error;
-use std::io;
 use std::fmt::{self, Display, Formatter};
+use std::io;
+
+use serde::Deserialize;
+
+type Result<T> = std::result::Result<T, Error>;
 
 pub struct Domain {
     dom: kvmi::Domain,
@@ -28,7 +33,9 @@ enum PageMode {
 }
 
 impl Domain {
-    pub async fn new<T, F>(stream: T, validator: F) -> kvmi::Result<Self>
+    const IA32_LSTAR: u32 = 0xC000_0082;
+    const IA32_CSTAR: u32 = 0xC000_0083;
+    pub async fn new<T, F>(stream: T, validator: F, profile: &RekallProfile) -> Result<Self>
     where
         T: Write + Read + Send + AsRawFd + Unpin + 'static,
         F: FnOnce(&str, &[u8], i64) -> Option<HSToWire>,
@@ -36,12 +43,27 @@ impl Domain {
         let dom = DomainBuilder::new(stream);
         let (mut dom, event_rx) = dom.handshake(validator).await?;
 
-        let msg = GetRegisters::new(0, vec![]);
+        let msg = GetRegisters::new(0, vec![Self::IA32_LSTAR, Self::IA32_CSTAR]);
         let reply = dom.send(msg).await?;
 
         let paging = Self::get_paging_mode_from(&reply);
 
         info!("paging mode: {:?}", paging);
+
+        match paging {
+            PageMode::IA32e => (),
+            _ => return Err(Error::Unsupported),
+        }
+
+        let msrs: HashMap<u32, u64> = reply
+            .get_msrs()
+            .iter()
+            .map(|msr| (msr.index, msr.data))
+            .collect();
+
+        let kernel_base_va = Self::get_kernel_va_from(&msrs, profile)?;
+
+        info!("kernel base virtual address: 0x{:?}", kernel_base_va);
 
         Ok(Self { dom, event_rx })
     }
@@ -68,6 +90,45 @@ impl Domain {
 
         Other
     }
+
+    fn get_kernel_va_from(msrs: &HashMap<u32, u64>, profile: &RekallProfile) -> Result<u64> {
+        debug!("Finding kernel virtual address using KiSystemCall64Shadow & KiSystemCall32Shadow");
+
+        let functions = &profile.functions;
+
+        let va = [
+            ("KiSystemCall64Shadow", Self::IA32_LSTAR),
+            ("KiSystemCall32Shadow", Self::IA32_CSTAR),
+        ]
+        .iter()
+        .map(|(symbol, msr)| {
+            let symbol_rva = match functions.get(&symbol[..]) {
+                Some(addr) => addr,
+                None => return Err(Error::KernelVAddr),
+            };
+
+            if let Some(data) = msrs.get(msr) {
+                debug!("{}: 0x{}", symbol, symbol_rva);
+                debug!("msr(0x{}): 0x{}", msr, data);
+                Ok(data - symbol_rva)
+            } else {
+                Err(Error::KernelVAddr)
+            }
+        })
+        .collect::<Result<Vec<u64>>>()?;
+
+        if va[0] != va[1] {
+            return Err(Error::KernelVAddr);
+        }
+
+        Ok(va[0])
+    }
+}
+
+#[derive(Deserialize)]
+pub struct RekallProfile {
+    #[serde(rename(deserialize = "$FUNCTIONS"))]
+    functions: HashMap<String, u64>,
 }
 
 impl error::Error for Error {}
