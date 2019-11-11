@@ -9,8 +9,6 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::process;
 
-use futures::prelude::*;
-
 use async_std::os::unix::net::UnixListener;
 use async_std::prelude::*;
 use async_std::task;

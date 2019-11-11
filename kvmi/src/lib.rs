@@ -14,11 +14,8 @@ use std::time::Duration;
 use async_std::io::prelude::*;
 use async_std::io::BufReader;
 use async_std::os::unix::io::{AsRawFd, RawFd};
+use async_std::sync;
 use async_std::task;
-
-use futures::channel::mpsc as mpsc_fut;
-use futures::channel::oneshot;
-use futures::{SinkExt, StreamExt};
 
 use log::{debug, error};
 
@@ -83,7 +80,7 @@ where
 
     const MIN_HS_DATA: u32 = (size_of::<HSFromWire>() - size_of::<[u8; 64]>()) as u32;
     const MAX_HS_DATA: u32 = 64 * 1024;
-    pub async fn handshake<F>(self, validate: F) -> Result<(Domain, mpsc_fut::Receiver<Event>)>
+    pub async fn handshake<F>(self, validate: F) -> Result<(Domain, sync::Receiver<Event>)>
     where
         F: FnOnce(&str, &[u8], i64) -> Option<HSToWire>,
     {
@@ -92,8 +89,8 @@ where
 
         let fd = self.fd;
 
-        let (event_tx, event_rx) = mpsc_fut::channel(5);
-        let (req_tx, req_rx) = mpsc_fut::channel(1);
+        let (event_tx, event_rx) = sync::channel(5);
+        let (req_tx, req_rx) = sync::channel(1);
         let deserializer = task::spawn(Self::deserializer(reader, event_tx, req_rx));
 
         let to_wire = match validate(&name, &uuid[..], start_time) {
@@ -175,8 +172,8 @@ where
 
     async fn deserializer(
         mut reader: BufReader<T>,
-        mut event_tx: mpsc_fut::Sender<Event>,
-        mut req_rx: mpsc_fut::Receiver<Request>,
+        mut event_tx: sync::Sender<Event>,
+        mut req_rx: sync::Receiver<Request>,
     ) -> Result<()> {
         loop {
             let header = Self::recv_header(&mut reader).await?;
@@ -189,10 +186,10 @@ where
 
     async fn recv_reply(
         mut reader: &mut BufReader<T>,
-        req_rx: &mut mpsc_fut::Receiver<Request>,
+        req_rx: &mut sync::Receiver<Request>,
         header: MsgHeader,
     ) -> Result<()> {
-        let req = match req_rx.next().await {
+        let req = match req_rx.recv().await {
             None => {
                 error!("Unexpected closure of the request channel");
                 return Err(
@@ -218,19 +215,14 @@ where
             Self::consume_bytes(reader, (size as usize) - actual_sz).await?;
         }
 
-        match req.result.send(buffer) {
-            Err(_) => {
-                error!("failed to send result through oneshot channel");
-                Err(io::Error::new(io::ErrorKind::WriteZero, "Cannot write the result").into())
-            }
-            _ => Ok(()),
-        }
+        req.result.send(buffer).await;
+        Ok(())
     }
 
     const KVMI_MSG_SZ: usize = 4096 - 8;
     async fn recv_event(
         reader: &mut BufReader<T>,
-        event_tx: &mut mpsc_fut::Sender<Event>,
+        event_tx: &mut sync::Sender<Event>,
         header: MsgHeader,
     ) -> Result<()> {
         if header.size as usize > Self::KVMI_MSG_SZ {
@@ -245,10 +237,7 @@ where
         reader.read_exact(&mut buffer[..]).await?;
 
         let event = Self::construct_event(buffer, header.seq)?;
-        if let Err(e) = event_tx.send(event).await {
-            error!("failed to send result through event channel");
-            return Err(e.into());
-        }
+        event_tx.send(event).await;
 
         Ok(())
     }
@@ -381,7 +370,7 @@ pub struct Domain {
     start_time: i64,
     name: String,
     fd: RawFd,
-    req_tx: mpsc_fut::Sender<Request>,
+    req_tx: sync::Sender<Request>,
     deser_handle: Option<task::JoinHandle<Result<()>>>,
 }
 
@@ -451,17 +440,16 @@ impl Domain {
         let result = match req_n_rx {
             Some((req, rx)) => {
                 let req_tx = &mut self.req_tx;
-                match req_tx.send(req).await {
-                    Ok(_) => {
-                        Self::request(self.fd, iov).await?;
-                        rx.await?
-                    }
-                    Err(e) => {
-                        error!("unable to send request through the request channel");
+                req_tx.send(req).await;
+                Self::request(self.fd, iov).await?;
+                match rx.recv().await {
+                    Some(v) => v,
+                    None => {
+                        error!("unable to receive reply for the request");
                         if let Some(handle) = self.deser_handle.take() {
                             handle.await?;
                         }
-                        return Err(e.into());
+                        return Err(io::Error::from(io::ErrorKind::BrokenPipe).into());
                     }
                 }
             }
@@ -669,19 +657,6 @@ impl From<nix::Error> for Error {
         }
     }
 }
-
-impl From<mpsc_fut::SendError> for Error {
-    fn from(e: mpsc_fut::SendError) -> Self {
-        io::Error::new(io::ErrorKind::WriteZero, e).into()
-    }
-}
-
-impl From<oneshot::Canceled> for Error {
-    fn from(e: oneshot::Canceled) -> Self {
-        io::Error::new(io::ErrorKind::UnexpectedEof, e).into()
-    }
-}
-
 impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
         use ErrorKind::*;

@@ -6,8 +6,7 @@ edition = "2018"
 
 [dependencies]
 kvmi = { path = "../kvmi" }
-async-std = "0.99.9"
-futures-preview = {version = "0.3.0-alpha.19"}
+async-std = "1.0"
 log = "0.4"
 serde = {version = "1.0", features = ["derive"]}
 

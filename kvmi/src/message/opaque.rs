@@ -10,5 +10,5 @@ pub struct Request {
     pub size: usize,
     pub kind: u16,
     pub seq: u32,
-    pub result: oneshot::Sender<Vec<u8>>,
+    pub result: sync::Sender<Vec<u8>>,
 }

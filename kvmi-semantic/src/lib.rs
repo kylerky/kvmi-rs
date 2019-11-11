@@ -3,8 +3,7 @@ mod tests;
 
 use async_std::io::prelude::*;
 use async_std::os::unix::io::AsRawFd;
-
-use futures::channel::mpsc as mpsc_fut;
+use async_std::sync;
 
 use kvmi::message::{GetRegisters, GetRegistersReply};
 use kvmi::{DomainBuilder, Event, HSToWire};
@@ -22,7 +21,7 @@ type Result<T> = std::result::Result<T, Error>;
 
 pub struct Domain {
     dom: kvmi::Domain,
-    event_rx: mpsc_fut::Receiver<Event>,
+    event_rx: sync::Receiver<Event>,
 }
 
 #[derive(Debug, PartialEq)]

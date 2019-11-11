@@ -14,10 +14,10 @@ pub trait Message: Msg {}
 #[cfg(test)]
 mod tests;
 
-type ReqHandle = (Request, oneshot::Receiver<Vec<u8>>);
+type ReqHandle = (Request, sync::Receiver<Vec<u8>>);
 
 fn get_request(kind: u16, size: usize, seq: u32) -> ReqHandle {
-    let (tx, rx) = oneshot::channel();
+    let (tx, rx) = sync::channel(1);
     (
         Request {
             size,
