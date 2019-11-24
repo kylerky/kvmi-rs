@@ -1,6 +1,8 @@
 #[cfg(test)]
 mod tests;
 
+mod memory;
+
 use async_std::io::prelude::*;
 use async_std::os::unix::io::AsRawFd;
 use async_std::sync;
@@ -22,6 +24,7 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct Domain {
     dom: kvmi::Domain,
     event_rx: sync::Receiver<Event>,
+    kernel_base_pa: u64,
 }
 
 #[derive(Debug, PartialEq)]
@@ -31,9 +34,10 @@ enum PageMode {
     Other,
 }
 
+const IA32_LSTAR: u32 = 0xC000_0082;
+const IA32_CSTAR: u32 = 0xC000_0083;
+const CR3_MASK: u64 = (!0u64) << 12;
 impl Domain {
-    const IA32_LSTAR: u32 = 0xC000_0082;
-    const IA32_CSTAR: u32 = 0xC000_0083;
     pub async fn new<T, F>(stream: T, validator: F, profile: &RekallProfile) -> Result<Self>
     where
         T: Write + Read + Send + AsRawFd + Unpin + 'static,
@@ -42,7 +46,7 @@ impl Domain {
         let dom = DomainBuilder::new(stream);
         let (mut dom, event_rx) = dom.handshake(validator).await?;
 
-        let msg = GetRegisters::new(0, vec![Self::IA32_LSTAR, Self::IA32_CSTAR]);
+        let msg = GetRegisters::new(0, vec![IA32_LSTAR, IA32_CSTAR]);
         let reply = dom.send(msg).await?;
 
         let paging = Self::get_paging_mode_from(&reply);
@@ -62,9 +66,24 @@ impl Domain {
 
         let kernel_base_va = Self::get_kernel_va_from(&msrs, profile)?;
 
-        info!("kernel base virtual address: 0x{:?}", kernel_base_va);
+        let regs = reply.get_regs();
+        let cr3 = regs.sregs.cr3;
+        info!(
+            "kernel base virtual address: 0x{:x?}, cr3: 0x{:x?}",
+            kernel_base_va, cr3
+        );
 
-        Ok(Self { dom, event_rx })
+        let kernel_base_pa =
+            memory::translate_v2p(&mut dom, cr3 & CR3_MASK, kernel_base_va).await?;
+
+        let kernel_base_pa = kernel_base_pa.ok_or(Error::KernelPAddr)?;
+        info!("kernel base physical address: 0x{:x?}", kernel_base_pa);
+
+        Ok(Self {
+            dom,
+            event_rx,
+            kernel_base_pa,
+        })
     }
 
     fn get_paging_mode_from(reply: &GetRegistersReply) -> PageMode {
@@ -96,23 +115,19 @@ impl Domain {
         let functions = &profile.functions;
 
         let va = [
-            ("KiSystemCall64Shadow", Self::IA32_LSTAR),
-            ("KiSystemCall32Shadow", Self::IA32_CSTAR),
+            ("KiSystemCall64Shadow", IA32_LSTAR),
+            ("KiSystemCall32Shadow", IA32_CSTAR),
         ]
         .iter()
         .map(|(symbol, msr)| {
-            let symbol_rva = match functions.get(&symbol[..]) {
-                Some(addr) => addr,
-                None => return Err(Error::KernelVAddr),
-            };
+            let symbol_rva = functions.get(&symbol[..]).ok_or(Error::KernelVAddr)?;
 
-            if let Some(data) = msrs.get(msr) {
-                debug!("{}: 0x{}", symbol, symbol_rva);
-                debug!("msr(0x{}): 0x{}", msr, data);
-                Ok(data - symbol_rva)
-            } else {
-                Err(Error::KernelVAddr)
-            }
+            let data = msrs
+                .get(msr)
+                .ok_or_else(|| Error::Profile(format!("Missing function: {}", symbol)))?;
+            debug!("{}: 0x{:x?}", symbol, symbol_rva);
+            debug!("msr(0x{:x?}): 0x{:x?}", msr, data);
+            Ok(data - symbol_rva)
         })
         .collect::<Result<Vec<u64>>>()?;
 
@@ -136,6 +151,8 @@ impl error::Error for Error {}
 pub enum Error {
     KVMI(kvmi::Error),
     KernelVAddr,
+    KernelPAddr,
+    Profile(String),
     Unsupported,
 }
 
@@ -146,6 +163,8 @@ impl Display for Error {
             KVMI(e) => write!(f, "{}", e),
             Unsupported => write!(f, "Guest not supported"),
             KernelVAddr => write!(f, "failed to get the virtual address of the kernel"),
+            KernelPAddr => write!(f, "failed to get the physical address of the kernel"),
+            Profile(e) => write!(f, "Error in JSON profile: {}", e),
         }
     }
 }
@@ -162,7 +181,9 @@ impl From<Error> for io::Error {
         match e {
             Unsupported => io::Error::new(io::ErrorKind::Other, e),
             KernelVAddr => io::Error::new(io::ErrorKind::InvalidData, e),
+            KernelPAddr => io::Error::new(io::ErrorKind::InvalidData, e),
             KVMI(kvmi_err) => kvmi_err.into(),
+            Profile(_) => io::Error::new(io::ErrorKind::InvalidInput, e),
         }
     }
 }
