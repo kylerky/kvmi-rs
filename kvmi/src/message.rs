@@ -568,3 +568,38 @@ impl PFEventReply {
         })
     }
 }
+
+pub struct ReadPhysical {
+    gpa: u64,
+    size: u64,
+}
+impl Message for ReadPhysical {}
+impl Messenger for ReadPhysical {
+    type Reply = Vec<u8>;
+}
+impl Msg for ReadPhysical {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
+        let seq = new_seq();
+        let kind = KVMI_READ_PHYSICAL as u16;
+        let hdr = get_header(kind, size_of::<kvmi_read_physical>() as u16, seq);
+        let req_n_rx = get_request(kind, self.size as usize, seq);
+
+        let mut buf = VecBuf::<kvmi_read_physical>::new();
+        unsafe {
+            *buf.as_mut_type() = kvmi_read_physical {
+                size: self.size,
+                gpa: self.gpa,
+            };
+        }
+
+        (Some(req_n_rx), vec![hdr.into(), buf.into()])
+    }
+    fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
+        result
+    }
+}
+impl ReadPhysical {
+    pub fn new(gpa: u64, size: u64) -> Self {
+        Self { gpa, size }
+    }
+}
