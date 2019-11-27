@@ -99,12 +99,13 @@ async fn listen(path: &str) -> Result<i32, ListenError> {
 
 async fn handle_event(
     dom: &mut Domain,
-    event: Event,
+    event: kvmi::Result<Event>,
     pf_test_enabled: &mut bool,
 ) -> Result<(), kvmi::Error> {
     use Action::*;
     use EventExtra::*;
 
+    let event = event?;
     let extra = event.get_extra();
     match extra {
         PauseVCPU => {

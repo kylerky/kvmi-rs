@@ -80,7 +80,7 @@ where
 
     const MIN_HS_DATA: u32 = (size_of::<HSFromWire>() - size_of::<[u8; 64]>()) as u32;
     const MAX_HS_DATA: u32 = 64 * 1024;
-    pub async fn handshake<F>(self, validate: F) -> Result<(Domain, sync::Receiver<Event>)>
+    pub async fn handshake<F>(self, validate: F) -> Result<(Domain, sync::Receiver<Result<Event>>)>
     where
         F: FnOnce(&str, &[u8], i64) -> Option<HSToWire>,
     {
@@ -91,7 +91,7 @@ where
 
         let (event_tx, event_rx) = sync::channel(5);
         let (req_tx, req_rx) = sync::channel(1);
-        let deserializer = task::spawn(Self::deserializer(reader, event_tx, req_rx));
+        task::spawn(Self::deserializer(reader, event_tx, req_rx));
 
         let to_wire = match validate(&name, &uuid[..], start_time) {
             None => return Err(Error::from(ErrorKind::Handshake)),
@@ -108,7 +108,6 @@ where
                 start_time,
                 fd,
                 req_tx,
-                deser_handle: Some(deserializer),
             },
             event_rx,
         ))
@@ -171,14 +170,24 @@ where
     }
 
     async fn deserializer(
+        reader: BufReader<T>,
+        mut event_tx: sync::Sender<Result<Event>>,
+        req_rx: sync::Receiver<Request>,
+    ) {
+        if let Err(e) = Self::deserializer_inner(reader, &mut event_tx, req_rx).await {
+            event_tx.send(Err(e)).await;
+        }
+    }
+
+    async fn deserializer_inner(
         mut reader: BufReader<T>,
-        mut event_tx: sync::Sender<Event>,
+        event_tx: &mut sync::Sender<Result<Event>>,
         mut req_rx: sync::Receiver<Request>,
     ) -> Result<()> {
         loop {
             let header = Self::recv_header(&mut reader).await?;
             match header.id as u32 {
-                KVMI_EVENT => Self::recv_event(&mut reader, &mut event_tx, header).await?,
+                KVMI_EVENT => Self::recv_event(&mut reader, event_tx, header).await?,
                 _ => Self::recv_reply(&mut reader, &mut req_rx, header).await?,
             }
         }
@@ -222,7 +231,7 @@ where
     const KVMI_MSG_SZ: usize = 4096 - 8;
     async fn recv_event(
         reader: &mut BufReader<T>,
-        event_tx: &mut sync::Sender<Event>,
+        event_tx: &mut sync::Sender<Result<Event>>,
         header: MsgHeader,
     ) -> Result<()> {
         if header.size as usize > Self::KVMI_MSG_SZ {
@@ -237,7 +246,7 @@ where
         reader.read_exact(&mut buffer[..]).await?;
 
         let event = Self::construct_event(buffer, header.seq)?;
-        event_tx.send(event).await;
+        event_tx.send(Ok(event)).await;
 
         Ok(())
     }
@@ -371,7 +380,6 @@ pub struct Domain {
     name: String,
     fd: RawFd,
     req_tx: sync::Sender<Request>,
-    deser_handle: Option<task::JoinHandle<Result<()>>>,
 }
 
 impl Domain {
@@ -432,14 +440,14 @@ impl Domain {
         Ok(())
     }
 
-    pub async fn send<T>(&mut self, mut msg: T) -> Result<T::Reply>
+    pub async fn send<T>(&self, mut msg: T) -> Result<T::Reply>
     where
         T: Message,
     {
         let (req_n_rx, iov) = msg.get_req_info();
         let result = match req_n_rx {
             Some((req, rx)) => {
-                let req_tx = &mut self.req_tx;
+                let req_tx = &self.req_tx;
                 req_tx.send(req).await;
                 Self::request(self.fd, iov).await?;
                 match rx.recv().await {
