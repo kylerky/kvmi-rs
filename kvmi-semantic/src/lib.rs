@@ -35,7 +35,7 @@ type PSChanT = Result<u64>;
 
 pub struct Domain {
     dom: Arc<kvmi::Domain>,
-    event_rx: sync::Receiver<kvmi::Result<Event>>,
+    event_rx: sync::Receiver<Event>,
     kernel_base_pa: u64,
 }
 

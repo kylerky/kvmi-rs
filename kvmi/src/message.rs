@@ -56,7 +56,7 @@ impl Msg for GetMaxGfn {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_max_gfn_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(io::ErrorKind::BrokenPipe, "Error getting max gfn").into()
     }
     fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
@@ -80,7 +80,7 @@ impl Msg for GetVersion {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_version_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(io::ErrorKind::BrokenPipe, "Error getting KVMI version").into()
     }
     fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
@@ -104,7 +104,7 @@ impl Msg for GetVCPUNum {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_guest_info_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
             "Error getting the number of VCPU",
@@ -200,7 +200,7 @@ impl Msg for GetRegisters {
             vec![hdr.into(), vcpu_msg.into(), reg_msg.into(), msrs],
         )
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(io::ErrorKind::BrokenPipe, "Error getting the registers").into()
     }
     fn construct_reply(&self, mut result: Vec<u8>) -> Self::Reply {
@@ -260,7 +260,7 @@ impl Msg for ControlEvent {
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into()])
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
             format!("Error sending ControlEvent command: {:?}", self),
@@ -306,7 +306,7 @@ impl Msg for ControlCR {
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into()])
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
             format!("Error sending ControlCR command: {:?}", self),
@@ -355,7 +355,7 @@ impl Msg for PauseVCPUs {
             vec![prefix.into(), pause_msgs.into(), suffix.into()],
         )
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
             format!(
@@ -418,7 +418,7 @@ impl Msg for SetPageAccess {
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into(), entries])
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
             format!("Error setting page access: {:?}", self),
@@ -462,7 +462,7 @@ impl Msg for CommonEventReply {
         let hdr = get_header(kind, sz, seq);
         (None, vec![hdr.into(), self.buf.take().unwrap().into()])
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(io::ErrorKind::BrokenPipe, "Error sending reply to event").into()
     }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
@@ -515,7 +515,7 @@ impl Msg for CREventReply {
             ],
         )
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(io::ErrorKind::BrokenPipe, "Error sending CREventReply").into()
     }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
@@ -563,7 +563,7 @@ impl Msg for MSREventReply {
             ],
         )
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(io::ErrorKind::BrokenPipe, "Error sending MSREventReply").into()
     }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
@@ -611,7 +611,7 @@ impl Msg for PFEventReply {
             ],
         )
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(io::ErrorKind::BrokenPipe, "Error sending PFEventReply").into()
     }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
@@ -658,7 +658,7 @@ impl Msg for ReadPhysical {
 
         (Some(req_n_rx), vec![hdr.into(), buf.into()])
     }
-    fn get_error(&self) -> Error {
+    fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
             format!("Error reading physical address: 0x{:x?}", self.gpa),

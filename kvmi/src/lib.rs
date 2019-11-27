@@ -80,7 +80,7 @@ where
 
     const MIN_HS_DATA: u32 = (size_of::<HSFromWire>() - size_of::<[u8; 64]>()) as u32;
     const MAX_HS_DATA: u32 = 64 * 1024;
-    pub async fn handshake<F>(self, validate: F) -> Result<(Domain, sync::Receiver<Result<Event>>)>
+    pub async fn handshake<F>(self, validate: F) -> Result<(Domain, sync::Receiver<Event>)>
     where
         F: FnOnce(&str, &[u8], i64) -> Option<HSToWire>,
     {
@@ -91,7 +91,8 @@ where
 
         let (event_tx, event_rx) = sync::channel(5);
         let (req_tx, req_rx) = sync::channel(1);
-        task::spawn(Self::deserializer(reader, event_tx, req_rx));
+        let (err_tx, err_rx) = sync::channel(1);
+        task::spawn(Self::deserializer(reader, event_tx, req_rx, err_tx));
 
         let to_wire = match validate(&name, &uuid[..], start_time) {
             None => return Err(Error::from(ErrorKind::Handshake)),
@@ -108,6 +109,7 @@ where
                 start_time,
                 fd,
                 req_tx,
+                err_rx,
             },
             event_rx,
         ))
@@ -171,31 +173,32 @@ where
 
     async fn deserializer(
         reader: BufReader<T>,
-        mut event_tx: sync::Sender<Result<Event>>,
+        event_tx: sync::Sender<Event>,
         req_rx: sync::Receiver<Request>,
+        err_tx: sync::Sender<Error>,
     ) {
-        if let Err(e) = Self::deserializer_inner(reader, &mut event_tx, req_rx).await {
-            event_tx.send(Err(e)).await;
+        if let Err(e) = Self::deserializer_inner(reader, event_tx, req_rx).await {
+            err_tx.send(e).await;
         }
     }
 
     async fn deserializer_inner(
         mut reader: BufReader<T>,
-        event_tx: &mut sync::Sender<Result<Event>>,
-        mut req_rx: sync::Receiver<Request>,
+        event_tx: sync::Sender<Event>,
+        req_rx: sync::Receiver<Request>,
     ) -> Result<()> {
         loop {
             let header = Self::recv_header(&mut reader).await?;
             match header.id as u32 {
-                KVMI_EVENT => Self::recv_event(&mut reader, event_tx, header).await?,
-                _ => Self::recv_reply(&mut reader, &mut req_rx, header).await?,
+                KVMI_EVENT => Self::recv_event(&mut reader, &event_tx, header).await?,
+                _ => Self::recv_reply(&mut reader, &req_rx, header).await?,
             }
         }
     }
 
     async fn recv_reply(
         mut reader: &mut BufReader<T>,
-        req_rx: &mut sync::Receiver<Request>,
+        req_rx: &sync::Receiver<Request>,
         header: MsgHeader,
     ) -> Result<()> {
         let req = match req_rx.recv().await {
@@ -231,7 +234,7 @@ where
     const KVMI_MSG_SZ: usize = 4096 - 8;
     async fn recv_event(
         reader: &mut BufReader<T>,
-        event_tx: &mut sync::Sender<Result<Event>>,
+        event_tx: &sync::Sender<Event>,
         header: MsgHeader,
     ) -> Result<()> {
         if header.size as usize > Self::KVMI_MSG_SZ {
@@ -246,7 +249,7 @@ where
         reader.read_exact(&mut buffer[..]).await?;
 
         let event = Self::construct_event(buffer, header.seq)?;
-        event_tx.send(Ok(event)).await;
+        event_tx.send(event).await;
 
         Ok(())
     }
@@ -380,6 +383,7 @@ pub struct Domain {
     name: String,
     fd: RawFd,
     req_tx: sync::Sender<Request>,
+    err_rx: sync::Receiver<Error>,
 }
 
 impl Domain {
@@ -454,7 +458,8 @@ impl Domain {
                     Some(v) => v,
                     None => {
                         error!("unable to receive reply for the request");
-                        return Err(msg.get_error());
+                        let e = self.err_rx.recv().await;
+                        return Err(msg.get_error(e));
                     }
                 }
             }
