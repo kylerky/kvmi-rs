@@ -6,6 +6,8 @@ use crate::*;
 pub(super) use opaque::*;
 mod opaque;
 
+use std::io;
+
 pub trait Messenger {
     type Reply;
 }
@@ -54,6 +56,9 @@ impl Msg for GetMaxGfn {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_max_gfn_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
+    fn get_error(&self) -> Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "Error getting max gfn").into()
+    }
     fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
         let result: Box<kvmi_get_max_gfn_reply> =
             unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
@@ -75,6 +80,9 @@ impl Msg for GetVersion {
         let req_n_rx = get_request(kind, size_of::<kvmi_get_version_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
+    fn get_error(&self) -> Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "Error getting KVMI version").into()
+    }
     fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
         let result: Box<kvmi_get_version_reply> =
             unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
@@ -95,6 +103,13 @@ impl Msg for GetVCPUNum {
         let hdr = get_header(kind, 0, seq);
         let req_n_rx = get_request(kind, size_of::<kvmi_get_guest_info_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
+    }
+    fn get_error(&self) -> Error {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "Error getting the number of VCPU",
+        )
+        .into()
     }
     fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
         let result: Box<kvmi_get_guest_info_reply> =
@@ -185,6 +200,9 @@ impl Msg for GetRegisters {
             vec![hdr.into(), vcpu_msg.into(), reg_msg.into(), msrs],
         )
     }
+    fn get_error(&self) -> Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "Error getting the registers").into()
+    }
     fn construct_reply(&self, mut result: Vec<u8>) -> Self::Reply {
         let ptr = result.as_ptr().cast::<kvmi_get_registers_reply>();
 
@@ -215,6 +233,7 @@ impl GetRegisters {
     }
 }
 
+#[derive(Debug)]
 pub struct ControlEvent {
     vcpu: u16,
     event: EventKind,
@@ -241,6 +260,13 @@ impl Msg for ControlEvent {
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into()])
     }
+    fn get_error(&self) -> Error {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!("Error sending ControlEvent command: {:?}", self),
+        )
+        .into()
+    }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 impl ControlEvent {
@@ -253,6 +279,7 @@ impl ControlEvent {
     }
 }
 
+#[derive(Debug)]
 pub struct ControlCR {
     vcpu: u16,
     cr: u32,
@@ -278,6 +305,13 @@ impl Msg for ControlCR {
 
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into()])
+    }
+    fn get_error(&self) -> Error {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!("Error sending ControlCR command: {:?}", self),
+        )
+        .into()
     }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
@@ -321,6 +355,16 @@ impl Msg for PauseVCPUs {
             vec![prefix.into(), pause_msgs.into(), suffix.into()],
         )
     }
+    fn get_error(&self) -> Error {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!(
+                "Error sending PauseVCPUs command, number of VCPU: {}",
+                self.num
+            ),
+        )
+        .into()
+    }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 fn get_control_cmd_response_vec(enable: u8, now: u8) -> (VecBuf<ControlCmdRespMsg>, u32) {
@@ -345,6 +389,7 @@ impl PauseVCPUs {
     }
 }
 
+#[derive(Debug)]
 pub struct SetPageAccess {
     entries: Option<Vec<PageAccessEntry>>,
 }
@@ -372,6 +417,13 @@ impl Msg for SetPageAccess {
 
         let req_n_rx = get_request(kind, 0, seq);
         (Some(req_n_rx), vec![hdr.into(), msg.into(), entries])
+    }
+    fn get_error(&self) -> Error {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!("Error setting page access: {:?}", self),
+        )
+        .into()
     }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
@@ -409,6 +461,9 @@ impl Msg for CommonEventReply {
         let seq = self.seq;
         let hdr = get_header(kind, sz, seq);
         (None, vec![hdr.into(), self.buf.take().unwrap().into()])
+    }
+    fn get_error(&self) -> Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "Error sending reply to event").into()
     }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
@@ -460,6 +515,9 @@ impl Msg for CREventReply {
             ],
         )
     }
+    fn get_error(&self) -> Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "Error sending CREventReply").into()
+    }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 impl CREventReply {
@@ -504,6 +562,9 @@ impl Msg for MSREventReply {
                 self.msr.take().unwrap().into(),
             ],
         )
+    }
+    fn get_error(&self) -> Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "Error sending MSREventReply").into()
     }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
@@ -550,6 +611,9 @@ impl Msg for PFEventReply {
             ],
         )
     }
+    fn get_error(&self) -> Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "Error sending PFEventReply").into()
+    }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
 impl PFEventReply {
@@ -593,6 +657,13 @@ impl Msg for ReadPhysical {
         }
 
         (Some(req_n_rx), vec![hdr.into(), buf.into()])
+    }
+    fn get_error(&self) -> Error {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!("Error reading physical address: 0x{:x?}", self.gpa),
+        )
+        .into()
     }
     fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
         result

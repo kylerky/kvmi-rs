@@ -454,10 +454,7 @@ impl Domain {
                     Some(v) => v,
                     None => {
                         error!("unable to receive reply for the request");
-                        if let Some(handle) = self.deser_handle.take() {
-                            handle.await?;
-                        }
-                        return Err(io::Error::from(io::ErrorKind::BrokenPipe).into());
+                        return Err(msg.get_error());
                     }
                 }
             }
