@@ -4,10 +4,15 @@ use crate::{EPROCESS, PAGE_SHIFT, PTR_SZ};
 use log::debug;
 
 use async_std::sync::{self, Arc, Receiver, Sender};
-use async_std::task;
+use async_std::task::{self, JoinHandle};
 
 use std::collections::HashSet;
 use std::convert::TryInto;
+use std::mem;
+
+use futures::future::FutureExt;
+use futures::select;
+use futures::stream::StreamExt;
 
 const SYSTEM_PID: u64 = 4;
 
@@ -48,14 +53,31 @@ pub async fn by_eprocess_list_traversal(
     flink_rva: u64,
     blink_rva: u64,
 ) -> Result<Option<u64>> {
-    let processes = get_process_list_from(
+    let (shutdown, sd_rx) = sync::channel(1);
+    let (processes, handle) = get_process_list_from(
         Arc::clone(&dom),
         head,
+        sd_rx,
         pt_base,
         profile,
         flink_rva,
         blink_rva,
     )?;
+
+    let result = by_eprocess_list_traversal_inner(dom, processes, pt_base, profile, dtb_rva).await;
+
+    mem::drop(shutdown);
+    handle.await;
+    result
+}
+
+async fn by_eprocess_list_traversal_inner(
+    dom: Arc<kvmi::Domain>,
+    processes: Receiver<PSChanT>,
+    pt_base: u64,
+    profile: &RekallProfile,
+    dtb_rva: u64,
+) -> Result<Option<u64>> {
     let pid_rva = crate::get_struct_field_offset(profile, EPROCESS, "UniqueProcessId")?;
     // skip the list head
     processes.recv().await;
@@ -82,19 +104,25 @@ pub async fn by_eprocess_list_traversal(
 pub fn get_process_list_from(
     dom: Arc<kvmi::Domain>,
     head: u64,
+    sd_rx: Receiver<()>,
     pt_base: u64,
     profile: &RekallProfile,
     flink_rva: u64,
     blink_rva: u64,
-) -> Result<Receiver<PSChanT>> {
+) -> Result<(Receiver<PSChanT>, JoinHandle<()>)> {
     let links_rva = crate::get_struct_field_offset(profile, EPROCESS, "ActiveProcessLinks")?;
 
-    let (tx, rx) = sync::channel(1);
-    task::spawn(async move {
-        traverse_process_list(dom, head, pt_base, flink_rva, blink_rva, links_rva, tx).await;
+    let (tx, rx) = sync::channel(4);
+
+    let handle = task::spawn(async move {
+        let mut sd_rx = sd_rx.fuse();
+        select! {
+            () = traverse_process_list(dom, head, pt_base, flink_rva, blink_rva, links_rva, tx).fuse() => (),
+            _ = sd_rx.next() => (),
+        };
     });
 
-    Ok(rx)
+    Ok((rx, handle))
 }
 
 pub async fn traverse_process_list(

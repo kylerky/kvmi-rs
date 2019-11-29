@@ -84,7 +84,7 @@ async fn listen(mut opt: Opt) -> Result<(), io::Error> {
         let _dom = Domain::new(
             stream,
             |_, _, _| Some(HSToWire::new()),
-            &rekall_profile,
+            rekall_profile,
             opt.ptb.take(),
         )
         .await?;

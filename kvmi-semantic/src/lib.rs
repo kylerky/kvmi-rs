@@ -30,8 +30,9 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct Domain {
     dom: Arc<kvmi::Domain>,
     event_rx: sync::Receiver<Event>,
-    kernel_base_pa: u64,
+    kernel_base_va: u64,
     ptb: u64,
+    profile: RekallProfile,
 }
 
 #[derive(Debug, PartialEq)]
@@ -58,7 +59,7 @@ impl Domain {
     pub async fn new<T, F>(
         stream: T,
         validator: F,
-        profile: &RekallProfile,
+        profile: RekallProfile,
         ptb: Option<u64>,
     ) -> Result<Self>
     where
@@ -81,33 +82,36 @@ impl Domain {
         }
 
         let (kernel_base_va, kernel_base_pa, pt_base) =
-            memory::find_kernel_addr(&dom, &reply, profile).await?;
+            memory::find_kernel_addr(&dom, &reply, &profile).await?;
 
         let dom = Arc::new(dom);
         if let Some(ptb) = ptb {
             Ok(Self {
                 dom,
                 event_rx,
-                kernel_base_pa,
+                kernel_base_va,
                 ptb,
+                profile,
             })
         } else {
             let ptb =
-                memory::get_system_page_table(Arc::clone(&dom), kernel_base_va, pt_base, profile)
+                memory::get_system_page_table(Arc::clone(&dom), kernel_base_va, pt_base, &profile)
                     .await?;
             if let Some(ptb) = ptb {
                 info!("Page table base of System: 0x{:x?}", pt_base);
                 Ok(Self {
                     dom,
                     event_rx,
-                    kernel_base_pa,
+                    kernel_base_va,
                     ptb,
+                    profile,
                 })
             } else {
                 Err(Error::PageTable)
             }
         }
     }
+
     fn get_paging_mode_from(reply: &GetRegistersReply) -> PageMode {
         use PageMode::*;
 

@@ -16,7 +16,7 @@ use log::{debug, info};
 
 use regex::bytes::Regex;
 
-mod process;
+pub mod process;
 
 // [12..52] bit of the entry
 const ENTRY_POINTER_MASK: u64 = (!0u64) << 24 >> 12;
@@ -69,7 +69,7 @@ fn read_entry(entry: u64) -> (u64, bool, bool) {
     }
 }
 
-async fn read_struct_field(
+pub async fn read_struct_field(
     dom: &kvmi::Domain,
     struct_va: u64,
     field_offset: u64,
