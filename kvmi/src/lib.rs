@@ -6,7 +6,7 @@ use std::ffi::{CStr, FromBytesWithNulError};
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::marker::Unpin;
-use std::mem::{size_of, transmute};
+use std::mem::{self, size_of, transmute};
 use std::str::Utf8Error;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -14,8 +14,8 @@ use std::time::Duration;
 use async_std::io::prelude::*;
 use async_std::io::BufReader;
 use async_std::os::unix::io::{AsRawFd, RawFd};
-use async_std::sync;
-use async_std::task;
+use async_std::sync::{self, Receiver, Sender};
+use async_std::task::{self, JoinHandle};
 
 use log::{debug, error};
 
@@ -25,6 +25,10 @@ use nix::sys::uio::IoVec;
 
 use mio::unix::{EventedFd, UnixReady};
 use mio::{Events, Poll, PollOpt, Ready, Token};
+
+use futures::future::FutureExt;
+use futures::select;
+use futures::stream::StreamExt;
 
 #[macro_use]
 extern crate lazy_static;
@@ -80,7 +84,7 @@ where
 
     const MIN_HS_DATA: u32 = (size_of::<HSFromWire>() - size_of::<[u8; 64]>()) as u32;
     const MAX_HS_DATA: u32 = 64 * 1024;
-    pub async fn handshake<F>(self, validate: F) -> Result<(Domain, sync::Receiver<Event>)>
+    pub async fn handshake<F>(self, validate: F) -> Result<(Domain, Receiver<Event>)>
     where
         F: FnOnce(&str, &[u8], i64) -> Option<HSToWire>,
     {
@@ -92,7 +96,8 @@ where
         let (event_tx, event_rx) = sync::channel(5);
         let (req_tx, req_rx) = sync::channel(1);
         let (err_tx, err_rx) = sync::channel(1);
-        task::spawn(Self::deserializer(reader, event_tx, req_rx, err_tx));
+        let (shutdown, sd_rx) = sync::channel(1);
+        let deserializer = task::spawn(Self::deserializer(reader, event_tx, req_rx, err_tx, sd_rx));
 
         let to_wire = match validate(&name, &uuid[..], start_time) {
             None => return Err(Error::from(ErrorKind::Handshake)),
@@ -110,6 +115,8 @@ where
                 fd,
                 req_tx,
                 err_rx,
+                shutdown: Some(shutdown),
+                deserializer: Some(deserializer),
             },
             event_rx,
         ))
@@ -173,19 +180,26 @@ where
 
     async fn deserializer(
         reader: BufReader<T>,
-        event_tx: sync::Sender<Event>,
-        req_rx: sync::Receiver<Request>,
-        err_tx: sync::Sender<Error>,
+        event_tx: Sender<Event>,
+        req_rx: Receiver<Request>,
+        err_tx: Sender<Error>,
+        sd_rx: Receiver<()>,
     ) {
-        if let Err(e) = Self::deserializer_inner(reader, event_tx, req_rx).await {
-            err_tx.send(e).await;
-        }
+        let mut sd_rx = sd_rx.fuse();
+        select! {
+            x = Self::deserializer_inner(reader, event_tx, req_rx).fuse() =>
+                if let Err(e) = x {
+                    err_tx.send(e).await;
+                },
+
+            _ = sd_rx.next() => (),
+        };
     }
 
     async fn deserializer_inner(
         mut reader: BufReader<T>,
-        event_tx: sync::Sender<Event>,
-        req_rx: sync::Receiver<Request>,
+        event_tx: Sender<Event>,
+        req_rx: Receiver<Request>,
     ) -> Result<()> {
         loop {
             let header = Self::recv_header(&mut reader).await?;
@@ -198,7 +212,7 @@ where
 
     async fn recv_reply(
         mut reader: &mut BufReader<T>,
-        req_rx: &sync::Receiver<Request>,
+        req_rx: &Receiver<Request>,
         header: MsgHeader,
     ) -> Result<()> {
         let req = match req_rx.recv().await {
@@ -234,7 +248,7 @@ where
     const KVMI_MSG_SZ: usize = 4096 - 8;
     async fn recv_event(
         reader: &mut BufReader<T>,
-        event_tx: &sync::Sender<Event>,
+        event_tx: &Sender<Event>,
         header: MsgHeader,
     ) -> Result<()> {
         if header.size as usize > Self::KVMI_MSG_SZ {
@@ -382,8 +396,19 @@ pub struct Domain {
     start_time: i64,
     name: String,
     fd: RawFd,
-    req_tx: sync::Sender<Request>,
-    err_rx: sync::Receiver<Error>,
+    req_tx: Sender<Request>,
+    err_rx: Receiver<Error>,
+    shutdown: Option<Sender<()>>,
+    deserializer: Option<JoinHandle<()>>,
+}
+
+impl Drop for Domain {
+    fn drop(&mut self) {
+        // this is the only Sender for this Domain
+        // dropping it will make deserializer return
+        mem::drop(self.shutdown.take());
+        task::block_on(self.deserializer.take().unwrap());
+    }
 }
 
 impl Domain {
