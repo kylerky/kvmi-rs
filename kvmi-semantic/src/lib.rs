@@ -52,6 +52,9 @@ const PTR_SZ: u64 = mem::size_of::<u64>() as u64;
 const PAGE_SHIFT: u32 = 12;
 
 const KUSER_SHARED_DATA: &str = "_KUSER_SHARED_DATA";
+const LIST_ENTRY: &str = "_LIST_ENTRY";
+const FLINK: &str = "Flink";
+const BLINK: &str = "Blink";
 
 const LLP64_ULONG_SZ: u64 = 4;
 

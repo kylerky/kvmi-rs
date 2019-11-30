@@ -50,7 +50,7 @@ pub async fn translate_v2p(
         level -= 1;
         // add offset in a page frame
         if pg || level == 0 {
-            let mask = (!0) << offset;
+            let mask = (!0) << (offset + 3);
             break Some((paddr & mask) | (v_addr & !mask));
         }
         base = paddr;
@@ -115,14 +115,16 @@ pub async fn get_system_page_table(
     let blink_rva = crate::get_struct_field_offset(profile, "_LIST_ENTRY", "Blink")?;
     let name_rva = crate::get_struct_field_offset(profile, EPROCESS, "ImageFileName")?;
 
-    let pt_ptr = process::by_ps_init_sys(&dom, kernel_base_va, pt_base, profile, dtb_rva).await?;
-    if pt_ptr.is_some() {
-        return Ok(pt_ptr);
+    debug!("trying to get page table base from PsInitialSystemProcess");
+    let ptb = process::by_ps_init_sys(&dom, kernel_base_va, pt_base, profile, dtb_rva).await?;
+    if ptb.is_some() {
+        return Ok(ptb);
     }
 
+    debug!("trying to get page table base from process list");
     let process_head = kernel_base_va + crate::get_ksymbol_offset(profile, "PsActiveProcessHead")?;
     debug!("process_head: 0x{:x?}", process_head);
-    process::by_eprocess_list_traversal(
+    let ptb = process::process_list_traversal(
         Arc::clone(&dom),
         process_head,
         pt_base,
@@ -132,10 +134,14 @@ pub async fn get_system_page_table(
         blink_rva,
     )
     .await?;
+    if ptb.is_some() {
+        return Ok(ptb);
+    }
 
+    debug!("trying to get page table base by scanning");
     let max_gfn = dom.send(GetMaxGfn).await?;
     debug!("max_gfn: 0x{:?}", max_gfn);
-    by_physical_mem_scan(
+    let ptb = by_physical_mem_scan(
         &dom,
         profile,
         0x10_0000..max_gfn << PAGE_SHIFT,
@@ -146,7 +152,7 @@ pub async fn get_system_page_table(
     )
     .await?;
 
-    Ok(None)
+    Ok(ptb)
 }
 
 #[allow(clippy::trivial_regex)]
@@ -211,7 +217,6 @@ pub async fn by_physical_mem_scan(
                 *flink > 0
                     && *dtb > 0
                     && *dtb < addr_range.end
-                    && dtb.trailing_zeros() >= PAGE_SHIFT
             });
 
         for (_offset, dtb, flink) in matches {
