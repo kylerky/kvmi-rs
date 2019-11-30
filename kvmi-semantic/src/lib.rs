@@ -7,7 +7,7 @@ use memory::process::{self, PSChanT};
 
 use async_std::io::prelude::*;
 use async_std::os::unix::io::AsRawFd;
-use async_std::sync::{self, Receiver};
+use async_std::sync::{self, Arc, Receiver};
 
 use kvmi::message::{GetRegisters, GetRegistersReply};
 use kvmi::{DomainBuilder, Event, HSToWire};
@@ -86,7 +86,7 @@ impl Domain {
             _ => return Err(Error::Unsupported),
         }
 
-        let p_space = KVMIPhysical::from(dom);
+        let p_space = Arc::new(KVMIPhysical::from(dom));
         let (kernel_base_va, _kernel_base_pa, mut v_space) =
             memory::find_kernel_addr(p_space, &reply, &profile).await?;
 

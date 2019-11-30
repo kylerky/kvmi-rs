@@ -1,6 +1,6 @@
 use crate::Result;
 
-use async_std::sync::{Arc, Mutex};
+use async_std::sync::Arc;
 
 use std::convert::TryInto;
 
@@ -15,8 +15,8 @@ const VA_MASK: u64 = 0xff8;
 pub trait AddressSpace {
     type AddrT;
     // TODO
-    //     async fn read(&mut self, addr: Self::AddrT, sz: usize) -> Result<Vec<u8>>;
-    //     async fn write(&mut self, addr: Self::AddrT, data: Vec<u8>) -> Result<()>;
+    //     async fn read(&mut self, addr: Self::AddrT, sz: usize) -> Result<Option<Vec<u8>>>;
+    //     async fn write(&mut self, addr: Self::AddrT, data: Vec<u8>) -> Result<Option<()>>;
 }
 
 pub struct KVMIPhysical {
@@ -54,8 +54,7 @@ impl From<kvmi::Domain> for KVMIPhysical {
 
 #[derive(Clone)]
 pub struct IA32eVirtual {
-    // Mutex for atomicity when writing to the socket
-    kvmi: Arc<Mutex<KVMIPhysical>>,
+    base: Arc<KVMIPhysical>,
     ptb: <KVMIPhysical as AddressSpace>::AddrT,
 }
 
@@ -64,16 +63,16 @@ impl AddressSpace for IA32eVirtual {
 }
 
 impl IA32eVirtual {
-    pub fn new(kvmi: Arc<Mutex<KVMIPhysical>>, ptb: <KVMIPhysical as AddressSpace>::AddrT) -> Self {
-        Self { kvmi, ptb }
+    pub fn new(base: Arc<KVMIPhysical>, ptb: <KVMIPhysical as AddressSpace>::AddrT) -> Self {
+        Self { base, ptb }
     }
 
     pub fn get_ptb(&self) -> <Self as AddressSpace>::AddrT {
         self.ptb
     }
 
-    pub fn get_physical(&self) -> &Mutex<KVMIPhysical> {
-        &self.kvmi
+    pub fn get_base(&self) -> &Arc<KVMIPhysical> {
+        &self.base
     }
 
     pub fn set_ptb(&mut self, ptb: <KVMIPhysical as AddressSpace>::AddrT) {
@@ -87,8 +86,7 @@ impl IA32eVirtual {
     ) -> Result<Option<Vec<u8>>> {
         let p_addr = self.translate_v2p(v_addr).await?;
         if let Some(p_addr) = p_addr {
-            let physical = self.kvmi.lock().await;
-            physical.read(p_addr, sz).await.map(Some)
+            self.base.read(p_addr, sz).await.map(Some)
         } else {
             Ok(None)
         }
@@ -101,8 +99,7 @@ impl IA32eVirtual {
     ) -> Result<Option<()>> {
         let p_addr = self.translate_v2p(v_addr).await?;
         if let Some(p_addr) = p_addr {
-            let physical = self.kvmi.lock().await;
-            physical.write(p_addr, data).await.map(|_| Some(()))
+            self.base.write(p_addr, data).await.map(|_| Some(()))
         } else {
             Ok(None)
         }
@@ -120,10 +117,7 @@ impl IA32eVirtual {
             let v_addr_shift = (v_addr >> offset) & VA_MASK;
             let entry_addr = base | v_addr_shift;
 
-            let entry = {
-                let physical = self.kvmi.lock().await;
-                physical.read(entry_addr, 8).await?
-            };
+            let entry = self.base.read(entry_addr, 8).await?;
             let entry = u64::from_ne_bytes(entry[..].try_into().unwrap());
 
             // check entry

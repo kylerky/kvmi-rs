@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::ops::Range;
 
-use async_std::sync::{Arc, Mutex};
+use async_std::sync::Arc;
 
 use log::{debug, info};
 
@@ -73,7 +73,7 @@ pub async fn get_system_page_table(
 
     debug!("trying to get page table base by scanning");
     let max_gfn = {
-        let physical = v_space.get_physical().lock().await;
+        let physical = v_space.get_base();
         let dom = physical.get_dom();
         dom.send(GetMaxGfn).await?
     };
@@ -117,7 +117,7 @@ pub async fn by_physical_mem_scan(
     let mut prev_page = vec![0u8; page_sz];
     for addr in addr_range.clone().step_by(page_sz) {
         let page = {
-            let p_space = v_space.get_physical().lock().await;
+            let p_space = v_space.get_base();
             p_space.read(addr, page_sz).await?
         };
         let matches = RE
@@ -255,7 +255,7 @@ pub fn get_kernel_va_from(msrs: &HashMap<u32, u64>, profile: &RekallProfile) -> 
 }
 
 pub async fn find_kernel_addr(
-    p_space: KVMIPhysical,
+    p_space: Arc<KVMIPhysical>,
     reply: &GetRegistersReply,
     profile: &RekallProfile,
 ) -> Result<(u64, u64, IA32eVirtual)> {
@@ -274,7 +274,7 @@ pub async fn find_kernel_addr(
     );
 
     let pt_base = cr3 & CR3_MASK;
-    let v_space = IA32eVirtual::new(Arc::new(Mutex::new(p_space)), pt_base);
+    let v_space = IA32eVirtual::new(p_space, pt_base);
 
     let kernel_base_pa = v_space.translate_v2p(kernel_base_va).await?;
 
