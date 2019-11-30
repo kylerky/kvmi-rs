@@ -1,10 +1,11 @@
+use super::address_space::IA32eVirtual;
+use super::CR3_MASK;
 use crate::{RekallProfile, Result};
 use crate::{BLINK, EPROCESS, FLINK, LIST_ENTRY, PTR_SZ};
-use super::CR3_MASK;
 
 use log::debug;
 
-use async_std::sync::{self, Arc, Receiver, Sender};
+use async_std::sync::{self, Receiver, Sender};
 use async_std::task::{self, JoinHandle};
 
 use std::collections::HashSet;
@@ -20,25 +21,16 @@ const SYSTEM_PID: u64 = 4;
 
 pub type PSChanT = Result<u64>;
 pub async fn by_ps_init_sys(
-    dom: &kvmi::Domain,
+    v_space: &IA32eVirtual,
     kernel_base_va: u64,
-    pt_base: u64,
     profile: &RekallProfile,
     dtb_rva: u64,
 ) -> Result<Option<u64>> {
-    if let Some(proc_va) = super::read_kptr(
-        dom,
-        "PsInitialSystemProcess",
-        kernel_base_va,
-        pt_base,
-        profile,
-    )
-    .await?
+    if let Some(proc_va) =
+        super::read_kptr(v_space, "PsInitialSystemProcess", kernel_base_va, profile).await?
     {
         debug!("System virtual address: 0x{:x?}", proc_va);
-        if let Some(page_table_ptr) =
-            super::read_struct_field(dom, proc_va, dtb_rva, PTR_SZ, pt_base).await?
-        {
+        if let Some(page_table_ptr) = v_space.read(proc_va + dtb_rva, PTR_SZ).await? {
             let page_table_ptr = u64::from_ne_bytes(page_table_ptr[..].try_into().unwrap());
             return Ok(Some(page_table_ptr & CR3_MASK));
         }
@@ -47,10 +39,9 @@ pub async fn by_ps_init_sys(
 }
 
 pub async fn process_list_traversal<F, FR>(
-    dom: Arc<kvmi::Domain>,
+    v_space: IA32eVirtual,
     fut: F,
     head: u64,
-    pt_base: u64,
     profile: &RekallProfile,
 ) -> Result<FR::Output>
 where
@@ -58,8 +49,7 @@ where
     FR: Future,
 {
     let (shutdown, sd_rx) = sync::channel(1);
-    let (processes, handle) =
-        get_process_list_from(Arc::clone(&dom), head, sd_rx, pt_base, profile)?;
+    let (processes, handle) = get_process_list_from(v_space, head, sd_rx, profile)?;
 
     let result = fut(processes).await;
 
@@ -69,9 +59,8 @@ where
 }
 
 pub async fn by_eprocess_list_traversal(
-    dom: &kvmi::Domain,
+    v_space: &IA32eVirtual,
     processes: Receiver<PSChanT>,
-    pt_base: u64,
     profile: &RekallProfile,
     dtb_rva: u64,
 ) -> Result<Option<u64>> {
@@ -80,15 +69,16 @@ pub async fn by_eprocess_list_traversal(
     processes.recv().await;
     while let Some(process) = processes.recv().await {
         let process = process?;
-        if let Some(pid) = super::read_struct_field(dom, process, pid_rva, PTR_SZ, pt_base).await? {
+        if let Some(pid) = v_space.read(process + pid_rva, PTR_SZ).await? {
             let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
             if pid == SYSTEM_PID {
-                let dtb = super::read_struct_field(dom, process, dtb_rva, PTR_SZ, pt_base).await?;
+                // let dtb = super::read_struct_field(dom, process, dtb_rva, PTR_SZ, pt_base).await?;
+                let dtb = v_space.read(process + dtb_rva, PTR_SZ).await?;
                 if let Some(dtb) = dtb {
                     let dtb = u64::from_ne_bytes(dtb[..].try_into().unwrap());
                     // sanity check of dtb
                     if dtb > 0 {
-                        return Ok(Some(dtb));
+                        return Ok(Some(dtb & CR3_MASK));
                     }
                 }
             }
@@ -98,10 +88,9 @@ pub async fn by_eprocess_list_traversal(
 }
 
 pub fn get_process_list_from(
-    dom: Arc<kvmi::Domain>,
+    v_space: IA32eVirtual,
     head: u64,
     sd_rx: Receiver<()>,
-    pt_base: u64,
     profile: &RekallProfile,
 ) -> Result<(Receiver<PSChanT>, JoinHandle<()>)> {
     let flink_rva = crate::get_struct_field_offset(profile, LIST_ENTRY, FLINK)?;
@@ -113,7 +102,7 @@ pub fn get_process_list_from(
     let handle = task::spawn(async move {
         let mut sd_rx = sd_rx.fuse();
         select! {
-            () = traverse_process_list(dom, head, pt_base, flink_rva, blink_rva, links_rva, tx).fuse() => (),
+            () = traverse_process_list(v_space, head, flink_rva, blink_rva, links_rva, tx).fuse() => (),
             _ = sd_rx.next() => (),
         };
     });
@@ -122,9 +111,8 @@ pub fn get_process_list_from(
 }
 
 pub async fn traverse_process_list(
-    dom: Arc<kvmi::Domain>,
+    v_space: IA32eVirtual,
     head: u64,
-    pt_base: u64,
     flink_rva: u64,
     blink_rva: u64,
     links_rva: u64,
@@ -140,7 +128,7 @@ pub async fn traverse_process_list(
     seen.insert(head);
     while let Some(link) = processes.pop() {
         tx.send(Ok(link - links_rva)).await;
-        let links = match super::read_struct_field(&dom, link, 0, PTR_SZ * 2, pt_base).await {
+        let links = match v_space.read(link, PTR_SZ * 2).await {
             Ok(Some(l)) => l,
             Ok(None) => continue,
             Err(e) => {

@@ -2,16 +2,17 @@
 mod tests;
 
 mod memory;
+use memory::address_space::{IA32eVirtual, KVMIPhysical};
 use memory::process::{self, PSChanT};
 
 use async_std::io::prelude::*;
 use async_std::os::unix::io::AsRawFd;
-use async_std::sync::{self, Arc, Receiver};
+use async_std::sync::{self, Receiver};
 
 use kvmi::message::{GetRegisters, GetRegistersReply};
 use kvmi::{DomainBuilder, Event, HSToWire};
 
-use log::{info, debug};
+use log::{debug, info};
 
 use std::collections::HashMap;
 use std::convert::TryInto;
@@ -30,10 +31,9 @@ extern crate lazy_static;
 type Result<T> = std::result::Result<T, Error>;
 
 pub struct Domain {
-    dom: Arc<kvmi::Domain>,
+    v_space: IA32eVirtual,
     event_rx: sync::Receiver<Event>,
     kernel_base_va: u64,
-    ptb: u64,
     profile: RekallProfile,
 }
 
@@ -50,7 +50,7 @@ const IA32_CSTAR: u32 = 0xC000_0083;
 const EPROCESS: &str = "_EPROCESS";
 const KPROCESS: &str = "_KPROCESS";
 
-const PTR_SZ: u64 = mem::size_of::<u64>() as u64;
+const PTR_SZ: usize = mem::size_of::<u64>();
 const PAGE_SHIFT: u32 = 12;
 
 const KUSER_SHARED_DATA: &str = "_KUSER_SHARED_DATA";
@@ -58,7 +58,7 @@ const LIST_ENTRY: &str = "_LIST_ENTRY";
 const FLINK: &str = "Flink";
 const BLINK: &str = "Blink";
 
-const LLP64_ULONG_SZ: u64 = 4;
+const LLP64_ULONG_SZ: usize = 4;
 
 impl Domain {
     pub async fn new<T, F>(
@@ -86,34 +86,28 @@ impl Domain {
             _ => return Err(Error::Unsupported),
         }
 
-        let (kernel_base_va, kernel_base_pa, pt_base) =
-            memory::find_kernel_addr(&dom, &reply, &profile).await?;
+        let p_space = KVMIPhysical::from(dom);
+        let (kernel_base_va, _kernel_base_pa, mut v_space) =
+            memory::find_kernel_addr(p_space, &reply, &profile).await?;
 
-        let dom = Arc::new(dom);
         if let Some(ptb) = ptb {
+            v_space.set_ptb(ptb);
             Ok(Self {
-                dom,
+                v_space,
                 event_rx,
                 kernel_base_va,
-                ptb,
+                profile,
+            })
+        } else if memory::get_system_page_table(&mut v_space, kernel_base_va, &profile).await? {
+            info!("Page table base of System: 0x{:x?}", v_space.get_ptb());
+            Ok(Self {
+                v_space,
+                event_rx,
+                kernel_base_va,
                 profile,
             })
         } else {
-            let ptb =
-                memory::get_system_page_table(Arc::clone(&dom), kernel_base_va, pt_base, &profile)
-                    .await?;
-            if let Some(ptb) = ptb {
-                info!("Page table base of System: 0x{:x?}", ptb);
-                Ok(Self {
-                    dom,
-                    event_rx,
-                    kernel_base_va,
-                    ptb,
-                    profile,
-                })
-            } else {
-                Err(Error::PageTable)
-            }
+            Err(Error::PageTable)
         }
     }
 
@@ -144,10 +138,9 @@ impl Domain {
         let process_head =
             self.kernel_base_va + get_ksymbol_offset(&self.profile, "PsActiveProcessHead")?;
         process::process_list_traversal(
-            Arc::clone(&self.dom),
-            |processes| Self::print_eprocess(&self.dom, processes, self.ptb, &self.profile),
+            self.v_space.clone(),
+            |processes| Self::print_eprocess(&self.v_space, processes, &self.profile),
             process_head,
-            self.ptb,
             &self.profile,
         )
         .await??;
@@ -155,9 +148,8 @@ impl Domain {
     }
 
     async fn print_eprocess(
-        dom: &kvmi::Domain,
+        v_space: &IA32eVirtual,
         processes: Receiver<PSChanT>,
-        ptb: u64,
         profile: &RekallProfile,
     ) -> Result<()> {
         let pid_rva = get_struct_field_offset(profile, EPROCESS, "UniqueProcessId")?;
@@ -165,9 +157,7 @@ impl Domain {
         processes.recv().await;
         while let Some(process) = processes.recv().await {
             let process = process?;
-            if let Some(pid) =
-                memory::read_struct_field(&dom, process, pid_rva, PTR_SZ, ptb).await?
-            {
+            if let Some(pid) = v_space.read(process + pid_rva, PTR_SZ).await? {
                 let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
                 debug!("process: 0x{:x?}, pid: 0x{:x?}", process, pid);
             }
