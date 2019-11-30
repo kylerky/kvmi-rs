@@ -14,7 +14,7 @@ use std::time::Duration;
 use async_std::io::prelude::*;
 use async_std::io::BufReader;
 use async_std::os::unix::io::{AsRawFd, RawFd};
-use async_std::sync::{self, Receiver, Sender};
+use async_std::sync::{self, Mutex, Receiver, Sender};
 use async_std::task::{self, JoinHandle};
 
 use log::{debug, error};
@@ -112,8 +112,7 @@ where
                 name,
                 uuid,
                 start_time,
-                fd,
-                req_tx,
+                req_handle: Mutex::new(ReqHandle { fd, req_tx }),
                 err_rx,
                 shutdown: Some(shutdown),
                 deserializer: Some(deserializer),
@@ -395,11 +394,15 @@ pub struct Domain {
     uuid: [u8; 16],
     start_time: i64,
     name: String,
-    fd: RawFd,
-    req_tx: Sender<Request>,
+    req_handle: Mutex<ReqHandle>,
     err_rx: Receiver<Error>,
     shutdown: Option<Sender<()>>,
     deserializer: Option<JoinHandle<()>>,
+}
+
+struct ReqHandle {
+    fd: RawFd,
+    req_tx: Sender<Request>,
 }
 
 impl Drop for Domain {
@@ -474,11 +477,13 @@ impl Domain {
         T: Message,
     {
         let (req_n_rx, iov) = msg.get_req_info();
+        let handle = self.req_handle.lock().await;
         let result = match req_n_rx {
             Some((req, rx)) => {
-                let req_tx = &self.req_tx;
+                let req_tx = &handle.req_tx;
                 req_tx.send(req).await;
-                Self::request(self.fd, iov).await?;
+                Self::request(handle.fd, iov).await?;
+                mem::drop(handle);
                 match rx.recv().await {
                     Some(v) => v,
                     None => {
@@ -489,7 +494,8 @@ impl Domain {
                 }
             }
             None => {
-                Self::request(self.fd, iov).await?;
+                Self::request(handle.fd, iov).await?;
+                mem::drop(handle);
                 vec![]
             }
         };
