@@ -1,5 +1,6 @@
 use crate::{RekallProfile, Result};
-use crate::{EPROCESS, PAGE_SHIFT, PTR_SZ};
+use crate::{BLINK, EPROCESS, FLINK, LIST_ENTRY, PTR_SZ};
+use super::CR3_MASK;
 
 use log::debug;
 
@@ -8,6 +9,7 @@ use async_std::task::{self, JoinHandle};
 
 use std::collections::HashSet;
 use std::convert::TryInto;
+use std::future::Future;
 use std::mem;
 
 use futures::future::FutureExt;
@@ -16,7 +18,7 @@ use futures::stream::StreamExt;
 
 const SYSTEM_PID: u64 = 4;
 
-type PSChanT = Result<u64>;
+pub type PSChanT = Result<u64>;
 pub async fn by_ps_init_sys(
     dom: &kvmi::Domain,
     kernel_base_va: u64,
@@ -38,41 +40,36 @@ pub async fn by_ps_init_sys(
             super::read_struct_field(dom, proc_va, dtb_rva, PTR_SZ, pt_base).await?
         {
             let page_table_ptr = u64::from_ne_bytes(page_table_ptr[..].try_into().unwrap());
-            return Ok(Some(page_table_ptr));
+            return Ok(Some(page_table_ptr & CR3_MASK));
         }
     }
     Ok(None)
 }
 
-pub async fn by_eprocess_list_traversal(
+pub async fn process_list_traversal<F, FR>(
     dom: Arc<kvmi::Domain>,
+    fut: F,
     head: u64,
     pt_base: u64,
     profile: &RekallProfile,
-    dtb_rva: u64,
-    flink_rva: u64,
-    blink_rva: u64,
-) -> Result<Option<u64>> {
+) -> Result<FR::Output>
+where
+    F: FnOnce(Receiver<PSChanT>) -> FR,
+    FR: Future,
+{
     let (shutdown, sd_rx) = sync::channel(1);
-    let (processes, handle) = get_process_list_from(
-        Arc::clone(&dom),
-        head,
-        sd_rx,
-        pt_base,
-        profile,
-        flink_rva,
-        blink_rva,
-    )?;
+    let (processes, handle) =
+        get_process_list_from(Arc::clone(&dom), head, sd_rx, pt_base, profile)?;
 
-    let result = by_eprocess_list_traversal_inner(dom, processes, pt_base, profile, dtb_rva).await;
+    let result = fut(processes).await;
 
     mem::drop(shutdown);
     handle.await;
-    result
+    Ok(result)
 }
 
-async fn by_eprocess_list_traversal_inner(
-    dom: Arc<kvmi::Domain>,
+pub async fn by_eprocess_list_traversal(
+    dom: &kvmi::Domain,
     processes: Receiver<PSChanT>,
     pt_base: u64,
     profile: &RekallProfile,
@@ -83,15 +80,14 @@ async fn by_eprocess_list_traversal_inner(
     processes.recv().await;
     while let Some(process) = processes.recv().await {
         let process = process?;
-        if let Some(pid) = super::read_struct_field(&dom, process, pid_rva, PTR_SZ, pt_base).await?
-        {
+        if let Some(pid) = super::read_struct_field(dom, process, pid_rva, PTR_SZ, pt_base).await? {
             let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
             if pid == SYSTEM_PID {
-                let dtb = super::read_struct_field(&dom, process, dtb_rva, PTR_SZ, pt_base).await?;
+                let dtb = super::read_struct_field(dom, process, dtb_rva, PTR_SZ, pt_base).await?;
                 if let Some(dtb) = dtb {
                     let dtb = u64::from_ne_bytes(dtb[..].try_into().unwrap());
                     // sanity check of dtb
-                    if dtb > 0 && dtb.trailing_zeros() >= PAGE_SHIFT {
+                    if dtb > 0 {
                         return Ok(Some(dtb));
                     }
                 }
@@ -107,9 +103,9 @@ pub fn get_process_list_from(
     sd_rx: Receiver<()>,
     pt_base: u64,
     profile: &RekallProfile,
-    flink_rva: u64,
-    blink_rva: u64,
 ) -> Result<(Receiver<PSChanT>, JoinHandle<()>)> {
+    let flink_rva = crate::get_struct_field_offset(profile, LIST_ENTRY, FLINK)?;
+    let blink_rva = crate::get_struct_field_offset(profile, LIST_ENTRY, BLINK)?;
     let links_rva = crate::get_struct_field_offset(profile, EPROCESS, "ActiveProcessLinks")?;
 
     let (tx, rx) = sync::channel(4);

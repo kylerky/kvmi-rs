@@ -14,6 +14,8 @@ use kvmi::HSToWire;
 
 use structopt::StructOpt;
 
+use log::debug;
+
 #[derive(StructOpt)]
 #[structopt(name = "get_ptb")]
 struct Opt {
@@ -81,13 +83,15 @@ async fn listen(mut opt: Opt) -> Result<(), io::Error> {
         "#;
 
         let rekall_profile: RekallProfile = serde_json::from_str(&rekall_profile)?;
-        let _dom = Domain::new(
+        let dom = Domain::new(
             stream,
             |_, _, _| Some(HSToWire::new()),
             rekall_profile,
             opt.ptb.take(),
         )
         .await?;
+        debug!("begin traversing the process list");
+        dom.traverse_process_list().await?;
     }
 
     Ok(())

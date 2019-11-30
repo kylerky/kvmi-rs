@@ -2,17 +2,19 @@
 mod tests;
 
 mod memory;
+use memory::process::{self, PSChanT};
 
 use async_std::io::prelude::*;
 use async_std::os::unix::io::AsRawFd;
-use async_std::sync::{self, Arc};
+use async_std::sync::{self, Arc, Receiver};
 
 use kvmi::message::{GetRegisters, GetRegistersReply};
 use kvmi::{DomainBuilder, Event, HSToWire};
 
-use log::info;
+use log::{info, debug};
 
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::io;
@@ -101,7 +103,7 @@ impl Domain {
                 memory::get_system_page_table(Arc::clone(&dom), kernel_base_va, pt_base, &profile)
                     .await?;
             if let Some(ptb) = ptb {
-                info!("Page table base of System: 0x{:x?}", pt_base);
+                info!("Page table base of System: 0x{:x?}", ptb);
                 Ok(Self {
                     dom,
                     event_rx,
@@ -136,6 +138,41 @@ impl Domain {
         }
 
         Other
+    }
+
+    pub async fn traverse_process_list(&self) -> Result<()> {
+        let process_head =
+            self.kernel_base_va + get_ksymbol_offset(&self.profile, "PsActiveProcessHead")?;
+        process::process_list_traversal(
+            Arc::clone(&self.dom),
+            |processes| Self::print_eprocess(&self.dom, processes, self.ptb, &self.profile),
+            process_head,
+            self.ptb,
+            &self.profile,
+        )
+        .await??;
+        Ok(())
+    }
+
+    async fn print_eprocess(
+        dom: &kvmi::Domain,
+        processes: Receiver<PSChanT>,
+        ptb: u64,
+        profile: &RekallProfile,
+    ) -> Result<()> {
+        let pid_rva = get_struct_field_offset(profile, EPROCESS, "UniqueProcessId")?;
+        // skip the list head
+        processes.recv().await;
+        while let Some(process) = processes.recv().await {
+            let process = process?;
+            if let Some(pid) =
+                memory::read_struct_field(&dom, process, pid_rva, PTR_SZ, ptb).await?
+            {
+                let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
+                debug!("process: 0x{:x?}, pid: 0x{:x?}", process, pid);
+            }
+        }
+        Ok(())
     }
 }
 

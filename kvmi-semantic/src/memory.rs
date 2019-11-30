@@ -126,14 +126,12 @@ pub async fn get_system_page_table(
     debug!("process_head: 0x{:x?}", process_head);
     let ptb = process::process_list_traversal(
         Arc::clone(&dom),
+        |processes| process::by_eprocess_list_traversal(&dom, processes, pt_base, profile, dtb_rva),
         process_head,
         pt_base,
         profile,
-        dtb_rva,
-        flink_rva,
-        blink_rva,
     )
-    .await?;
+    .await??;
     if ptb.is_some() {
         return Ok(ptb);
     }
