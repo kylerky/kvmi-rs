@@ -1,3 +1,8 @@
+#[cfg(test)]
+mod tests;
+
+use cfg_if::cfg_if;
+
 use crate::Result;
 
 use async_std::sync::Arc;
@@ -19,36 +24,55 @@ pub trait AddressSpace {
     //     async fn write(&mut self, addr: Self::AddrT, data: Vec<u8>) -> Result<Option<()>>;
 }
 
-pub struct KVMIPhysical {
-    dom: kvmi::Domain,
-}
-
-impl AddressSpace for KVMIPhysical {
-    type AddrT = u64;
-}
-
-impl KVMIPhysical {
-    pub fn new(dom: kvmi::Domain) -> Self {
-        Self { dom }
-    }
-
-    pub fn get_dom(&self) -> &kvmi::Domain {
-        &self.dom
-    }
-
-    pub async fn read(&self, addr: <Self as AddressSpace>::AddrT, sz: usize) -> Result<Vec<u8>> {
-        let data = self.dom.send(ReadPhysical::new(addr, sz as u64)).await?;
-        Ok(data)
-    }
-
-    pub async fn write(&self, addr: <Self as AddressSpace>::AddrT, data: Vec<u8>) -> Result<()> {
-        Ok(())
+cfg_if! {
+    if #[cfg(test)] {
+        pub use tests::MockKVMIPhysical as KVMIPhysical;
+    } else {
+        pub use kvmi_physical::*;
     }
 }
 
-impl From<kvmi::Domain> for KVMIPhysical {
-    fn from(dom: kvmi::Domain) -> Self {
-        Self::new(dom)
+mod kvmi_physical {
+    use super::*;
+    pub struct KVMIPhysical {
+        dom: kvmi::Domain,
+    }
+
+    impl AddressSpace for KVMIPhysical {
+        type AddrT = u64;
+    }
+
+    impl KVMIPhysical {
+        pub fn new(dom: kvmi::Domain) -> Self {
+            Self { dom }
+        }
+
+        pub fn get_dom(&self) -> &kvmi::Domain {
+            &self.dom
+        }
+
+        pub async fn read(
+            &self,
+            addr: <Self as AddressSpace>::AddrT,
+            sz: usize,
+        ) -> Result<Vec<u8>> {
+            let data = self.dom.send(ReadPhysical::new(addr, sz as u64)).await?;
+            Ok(data)
+        }
+
+        pub async fn write(
+            &self,
+            addr: <Self as AddressSpace>::AddrT,
+            data: Vec<u8>,
+        ) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    impl From<kvmi::Domain> for KVMIPhysical {
+        fn from(dom: kvmi::Domain) -> Self {
+            Self::new(dom)
+        }
     }
 }
 
