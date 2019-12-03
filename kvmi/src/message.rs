@@ -233,6 +233,53 @@ impl GetRegisters {
     }
 }
 
+pub struct SetRegisters {
+    vcpu: u16,
+    regs: Option<VecBuf<kvm_regs>>,
+}
+impl Message for SetRegisters {}
+impl Messenger for SetRegisters {
+    type Reply = ();
+}
+impl Msg for SetRegisters {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
+        let kind = KVMI_SET_REGISTERS as u16;
+        let msg_sz = size_of::<kvmi_vcpu_hdr>() + size_of::<kvm_regs>();
+        let seq = new_seq();
+        let hdr = get_header(kind, msg_sz as u16, seq);
+        let regs = self.regs.take().unwrap();
+
+        let mut vcpu_msg = VecBuf::<kvmi_vcpu_hdr>::new();
+        unsafe {
+            let typed = vcpu_msg.as_mut_type();
+            typed.vcpu = self.vcpu;
+        }
+
+        let req_n_rx = get_request(kind, 0, seq);
+        (
+            Some(req_n_rx),
+            vec![hdr.into(), vcpu_msg.into(), regs.into()],
+        )
+    }
+
+    fn get_error(&self, _e: Option<Error>) -> Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "Error setting registers").into()
+    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
+}
+impl SetRegisters {
+    pub fn new(vcpu: u16, regs: &kvm_regs) -> Self {
+        let mut regs_buf = VecBuf::<kvm_regs>::new();
+        unsafe {
+            *regs_buf.as_mut_type() = *regs;
+        }
+        Self {
+            vcpu,
+            regs: Some(regs_buf),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ControlEvent {
     vcpu: u16,
@@ -633,6 +680,55 @@ impl PFEventReply {
     }
 }
 
+pub struct BPEventReply {
+    common: Option<VecBuf<EventReply>>,
+    bp: Option<VecBuf<kvmi_event_breakpoint_reply>>,
+    seq: u32,
+}
+impl Message for BPEventReply {}
+impl Messenger for BPEventReply {
+    type Reply = ();
+}
+impl Msg for BPEventReply {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
+        let kind = KVMI_EVENT_REPLY as u16;
+        let sz = (size_of::<EventReply>() + size_of::<kvmi_event_breakpoint_reply>()) as u16;
+        let hdr = get_header(kind, sz, self.seq);
+        (
+            None,
+            vec![
+                hdr.into(),
+                self.common.take().unwrap().into(),
+                self.bp.take().unwrap().into(),
+            ],
+        )
+    }
+    fn get_error(&self, _e: Option<Error>) -> Error {
+        io::Error::new(io::ErrorKind::BrokenPipe, "Error sending BPEventReply").into()
+    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
+}
+impl BPEventReply {
+    pub fn new(event: &Event, action: Action, single_step: bool) -> Option<Self> {
+        use EventExtra::*;
+        match event.get_extra() {
+            Breakpoint(_) => (),
+            _ => return None,
+        }
+        let bp = unsafe {
+            let mut bp = VecBuf::<kvmi_event_breakpoint_reply>::new();
+            bp.as_mut_type().singlestep = single_step as u8;
+            bp
+        };
+        let common = get_event_reply_buf(event, action);
+        Some(Self {
+            common: Some(common),
+            bp: Some(bp),
+            seq: event.seq,
+        })
+    }
+}
+
 pub struct ReadPhysical {
     gpa: u64,
     size: u64,
@@ -672,5 +768,97 @@ impl Msg for ReadPhysical {
 impl ReadPhysical {
     pub fn new(gpa: u64, size: u64) -> Self {
         Self { gpa, size }
+    }
+}
+
+pub struct WritePhysical {
+    gpa: u64,
+    data: Option<Vec<u8>>,
+}
+impl Message for WritePhysical {}
+impl Messenger for WritePhysical {
+    type Reply = ();
+}
+impl Msg for WritePhysical {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
+        let kind = KVMI_WRITE_PHYSICAL as u16;
+        let data = self.data.take().unwrap();
+        let data_len = data.len();
+
+        let msg_sz = size_of::<kvmi_write_physical>() + data_len;
+        let seq = new_seq();
+        let hdr = get_header(kind, msg_sz as u16, seq);
+
+        let mut msg = VecBuf::<kvmi_write_physical>::new();
+        unsafe {
+            let typed = msg.as_mut_type();
+            typed.gpa = self.gpa;
+            typed.size = data_len as u64;
+        }
+
+        let req_n_rx = get_request(kind, 0, seq);
+        (Some(req_n_rx), vec![hdr.into(), msg.into(), data])
+    }
+    fn get_error(&self, _e: Option<Error>) -> Error {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!("Error writing to physical address: 0x{:x?}", self.gpa,),
+        )
+        .into()
+    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
+}
+impl WritePhysical {
+    pub fn new(gpa: u64, data: Vec<u8>) -> Self {
+        Self {
+            gpa,
+            data: Some(data),
+        }
+    }
+}
+
+pub struct SetSingleStep {
+    vcpu: u16,
+    enable: bool,
+}
+impl Message for SetSingleStep {}
+impl Messenger for SetSingleStep {
+    type Reply = ();
+}
+impl Msg for SetSingleStep {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
+        let kind = KVMI_SET_SINGLESTEP as u16;
+        let msg_sz = size_of::<kvmi_vcpu_hdr>() + size_of::<kvmi_set_singlestep>();
+        let seq = new_seq();
+        let hdr = get_header(kind, msg_sz as u16, seq);
+
+        let mut vcpu_msg = VecBuf::<kvmi_vcpu_hdr>::new();
+        let mut ss_msg = VecBuf::<kvmi_set_singlestep>::new();
+        unsafe {
+            let vcpu = vcpu_msg.as_mut_type();
+            vcpu.vcpu = self.vcpu;
+
+            let ss = ss_msg.as_mut_type();
+            ss.enable = self.enable as u8;
+        }
+
+        let req_n_rx = get_request(kind, 0, seq);
+        (
+            Some(req_n_rx),
+            vec![hdr.into(), vcpu_msg.into(), ss_msg.into()],
+        )
+    }
+    fn get_error(&self, _e: Option<Error>) -> Error {
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!("Error setting single step: {}", self.enable),
+        )
+        .into()
+    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
+}
+impl SetSingleStep {
+    pub fn new(vcpu: u16, enable: bool) -> Self {
+        Self { vcpu, enable }
     }
 }

@@ -44,6 +44,7 @@ enum {
 	KVMI_GET_PAGE_WRITE_BITMAP = 25,
 	KVMI_SET_PAGE_WRITE_BITMAP = 26,
 	KVMI_CONTROL_CMD_RESPONSE  = 27,
+	KVMI_SET_SINGLESTEP        = 28,
 	KVMI_GET_MAX_GFN	   = 29,
 
 	KVMI_NEXT_AVAILABLE_COMMAND,
@@ -174,6 +175,16 @@ struct kvmi_set_page_write_bitmap {
 	struct kvmi_page_write_bitmap_entry entries[0];
 };
 
+struct kvmi_set_singlestep {
+	__u8 enable;
+	__u8 padding[7];
+};
+
+struct kvmi_event_singlestep {
+	__u8 failed;
+	__u8 padding[7];
+};
+
 struct kvmi_get_vcpu_info_reply {
 	__u64 tsc_speed;
 };
@@ -260,6 +271,11 @@ struct kvmi_event_pf_reply {
 struct kvmi_event_breakpoint {
 	__u64 gpa;
 	__u8 insn_len;
+	__u8 padding[7];
+};
+
+struct kvmi_event_breakpoint_reply {
+	__u8 singlestep;
 	__u8 padding[7];
 };
 

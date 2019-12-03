@@ -97,6 +97,9 @@ pub struct KvmiEventTrap(kvmi_event_trap);
 #[derive(Debug)]
 #[repr(transparent)]
 pub struct KvmiEventDescriptor(kvmi_event_descriptor);
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct KvmiEventSingleStep(kvmi_event_singlestep);
 
 impl KvmiEventPF {
     pub fn as_raw_ref(&self) -> &kvmi_event_pf {
@@ -113,6 +116,16 @@ impl KvmiEventCR {
     }
     pub fn get_new_val(&self) -> u64 {
         self.0.new_value
+    }
+}
+
+impl KvmiEventBreakpoint {
+    pub fn get_gpa(&self) -> u64 {
+        self.0.gpa
+    }
+
+    pub fn get_insn_len(&self) -> u8 {
+        self.0.insn_len
     }
 }
 

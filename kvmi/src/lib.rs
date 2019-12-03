@@ -36,8 +36,8 @@ extern crate lazy_static;
 mod c_ffi;
 use c_ffi::*;
 pub use c_ffi::{
-    kvm_msr_entry, kvmi_event_arch, kvmi_event_pf, kvmi_get_registers_reply, HSToWire, KvmiEventCR,
-    KvmiEventPF, PageAccessEntry,
+    kvm_msr_entry, kvmi_event_arch, kvmi_event_pf, kvmi_get_registers_reply, HSToWire,
+    KvmiEventBreakpoint, KvmiEventCR, KvmiEventPF, KvmiEventSingleStep, PageAccessEntry,
 };
 
 mod utils;
@@ -63,6 +63,8 @@ pub enum Action {
 pub enum EventKind {
     PF = KVMI_EVENT_PF as u16,
     CR = KVMI_EVENT_CR as u16,
+    Breakpoint = KVMI_EVENT_BREAKPOINT as u16,
+    SingleStep = KVMI_EVENT_SINGLESTEP as u16,
 }
 
 pub struct DomainBuilder<T> {
@@ -93,7 +95,7 @@ where
 
         let fd = self.fd;
 
-        let (event_tx, event_rx) = sync::channel(5);
+        let (event_tx, event_rx) = sync::channel(10);
         let (req_tx, req_rx) = sync::channel(1);
         let (err_tx, err_rx) = sync::channel(1);
         let (shutdown, sd_rx) = sync::channel(1);
@@ -325,12 +327,12 @@ where
                 KVMI_EVENT_PF => EventExtra::PF(boxed_slice_to_type(details)),
                 KVMI_EVENT_TRAP => EventExtra::Trap(boxed_slice_to_type(details)),
                 KVMI_EVENT_DESCRIPTOR => EventExtra::Descriptor(boxed_slice_to_type(details)),
+                KVMI_EVENT_SINGLESTEP => EventExtra::SingleStep(boxed_slice_to_type(details)),
                 KVMI_EVENT_CREATE_VCPU => EventExtra::CreateVCPU,
                 KVMI_EVENT_HYPERCALL => EventExtra::HyperCall,
                 KVMI_EVENT_PAUSE_VCPU => EventExtra::PauseVCPU,
                 KVMI_EVENT_UNHOOK => EventExtra::Unhook,
                 KVMI_EVENT_XSETBV => EventExtra::XSetBV,
-                KVMI_EVENT_SINGLESTEP => EventExtra::SingleStep,
                 _ => {
                     error!(
                         "unkown event: {} (really should not be here)",
@@ -526,9 +528,9 @@ lazy_static! {
         (KVMI_EVENT_PAUSE_VCPU, 0),
         (KVMI_EVENT_PF, size_of::<KvmiEventPF>()),
         (KVMI_EVENT_TRAP, size_of::<KvmiEventTrap>()),
+        (KVMI_EVENT_SINGLESTEP, size_of::<KvmiEventSingleStep>()),
         (KVMI_EVENT_UNHOOK, 0),
         (KVMI_EVENT_XSETBV, 0),
-        (KVMI_EVENT_SINGLESTEP, 0),
     ]
     .iter()
     .copied()
@@ -551,8 +553,8 @@ impl Event {
         self.common.0.vcpu
     }
 
-    pub fn get_arch(&self) -> kvmi_event_arch {
-        self.common.0.arch
+    pub fn get_arch(&self) -> &kvmi_event_arch {
+        &self.common.0.arch
     }
 }
 
@@ -564,12 +566,12 @@ pub enum EventExtra {
     PF(Box<KvmiEventPF>),
     Trap(Box<KvmiEventTrap>),
     Descriptor(Box<KvmiEventDescriptor>),
+    SingleStep(Box<KvmiEventSingleStep>),
     CreateVCPU,
     HyperCall,
     PauseVCPU,
     Unhook,
     XSetBV,
-    SingleStep,
 }
 
 fn new_seq() -> u32 {
