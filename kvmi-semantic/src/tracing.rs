@@ -1,5 +1,5 @@
 use crate::event::*;
-use crate::memory::address_space::{AddressSpace, IA32eVirtual, KVMIPhysical};
+use crate::memory::address_space::{IA32eVirtual, KVMIPhysical, PhysicalAddrT};
 use crate::Action;
 use crate::{Error, Result};
 
@@ -37,10 +37,7 @@ pub async fn resume_from_bp(
     Ok(())
 }
 
-pub async fn set_bp_by_physical(
-    p_space: &KVMIPhysical,
-    addr: <KVMIPhysical as AddressSpace>::AddrT,
-) -> Result<()> {
+pub async fn set_bp_by_physical(p_space: &KVMIPhysical, addr: PhysicalAddrT) -> Result<()> {
     p_space.write(addr, vec![BP_INSTRUCTION]).await?;
     Ok(())
 }

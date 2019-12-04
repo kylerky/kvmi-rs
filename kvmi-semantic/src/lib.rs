@@ -11,7 +11,7 @@ use event::*;
 mod tracing;
 
 mod memory;
-use memory::address_space::{AddressSpace, IA32eVirtual, KVMIPhysical};
+use memory::address_space::{IA32eAddrT, IA32eVirtual, KVMIPhysical, PhysicalAddrT};
 use memory::process::{self, PSChanT};
 
 use async_std::io::prelude::*;
@@ -45,7 +45,7 @@ type Result<T> = std::result::Result<T, Error>;
 pub struct Domain {
     v_space: IA32eVirtual,
     event_rx: Receiver<Event>,
-    kernel_base_va: <IA32eVirtual as AddressSpace>::AddrT,
+    kernel_base_va: IA32eAddrT,
     profile: RekallProfile,
 }
 
@@ -217,11 +217,7 @@ impl Domain {
         tracing::resume_from_bp(&self.v_space, orig, event, extra, enable_ss).await
     }
 
-    pub async fn set_bp_by_physical(
-        &self,
-        gpa: <KVMIPhysical as AddressSpace>::AddrT,
-    ) -> Result<()> {
-        debug!("Setting breakpoint at 0x{:x?}", gpa);
+    pub async fn set_bp_by_physical(&self, gpa: PhysicalAddrT) -> Result<()> {
         tracing::set_bp_by_physical(self.v_space.get_base(), gpa).await
     }
 
@@ -231,18 +227,15 @@ impl Domain {
         Ok(())
     }
 
-    pub fn get_ksymbol_offset(
-        &self,
-        symbol: &str,
-    ) -> Result<<IA32eVirtual as AddressSpace>::AddrT> {
+    pub fn get_ksymbol_offset(&self, symbol: &str) -> Result<IA32eAddrT> {
         get_ksymbol_offset(&self.profile, symbol)
     }
 
-    pub fn get_kfunc_offset(&self, func: &str) -> Result<<IA32eVirtual as AddressSpace>::AddrT> {
+    pub fn get_kfunc_offset(&self, func: &str) -> Result<IA32eAddrT> {
         get_kfunc_offset(&self.profile, func)
     }
 
-    pub fn get_kernel_base_va(&self) -> <IA32eVirtual as AddressSpace>::AddrT {
+    pub fn get_kernel_base_va(&self) -> IA32eAddrT {
         self.kernel_base_va
     }
 
@@ -251,10 +244,7 @@ impl Domain {
     }
 }
 
-fn get_ksymbol_offset(
-    profile: &RekallProfile,
-    symbol: &str,
-) -> Result<<IA32eVirtual as AddressSpace>::AddrT> {
+fn get_ksymbol_offset(profile: &RekallProfile, symbol: &str) -> Result<IA32eAddrT> {
     profile
         .constants
         .get(symbol)
@@ -262,10 +252,7 @@ fn get_ksymbol_offset(
         .ok_or_else(|| Error::Profile(format!("Missing {}", symbol)))
 }
 
-fn get_kfunc_offset(
-    profile: &RekallProfile,
-    func: &str,
-) -> Result<<IA32eVirtual as AddressSpace>::AddrT> {
+fn get_kfunc_offset(profile: &RekallProfile, func: &str) -> Result<IA32eAddrT> {
     profile
         .functions
         .get(func)
@@ -277,7 +264,7 @@ fn get_struct_field_offset(
     profile: &RekallProfile,
     struct_name: &str,
     field_name: &str,
-) -> Result<<IA32eVirtual as AddressSpace>::AddrT> {
+) -> Result<IA32eAddrT> {
     let struct_arr = profile
         .structs
         .get(struct_name)
@@ -323,6 +310,7 @@ pub enum Error {
     Unsupported,
     PageTable,
     WrongEvent,
+    PageBoundary,
 }
 
 impl Display for Error {
@@ -334,6 +322,7 @@ impl Display for Error {
             KernelPAddr => write!(f, "failed to get the physical address of the kernel"),
             PageTable => write!(f, "failed to find the page tableof the kernel"),
             WrongEvent => write!(f, "Calling function using mismatched event"),
+            PageBoundary => write!(f, "Reading or writing across page boundary"),
             KVMI(e) => write!(f, "{}", e),
             Profile(e) => write!(f, "Error in JSON profile: {}", e),
         }
@@ -355,6 +344,7 @@ impl From<Error> for io::Error {
             KernelPAddr => io::Error::new(io::ErrorKind::InvalidData, e),
             PageTable => io::Error::new(io::ErrorKind::InvalidData, e),
             WrongEvent => io::Error::new(io::ErrorKind::InvalidInput, e),
+            PageBoundary => io::Error::new(io::ErrorKind::InvalidData, e),
             KVMI(kvmi_err) => kvmi_err.into(),
             Profile(_) => io::Error::new(io::ErrorKind::InvalidData, e),
         }

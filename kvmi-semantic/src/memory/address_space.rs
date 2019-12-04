@@ -3,7 +3,7 @@ mod tests;
 
 use cfg_if::cfg_if;
 
-use crate::Result;
+use crate::{Error, Result};
 
 use async_std::sync::Arc;
 
@@ -16,6 +16,12 @@ const ENTRY_POINTER_MASK: u64 = (!0u64) << 24 >> 12;
 const PG_MASK: u64 = 1u64 << 7;
 const P_MASK: u64 = 1;
 const VA_MASK: u64 = 0xff8;
+
+pub type PhysicalAddrT = u64;
+const ADDR_MASK: PhysicalAddrT = 0xfff;
+const PHYSICAL_PAGE_SZ: PhysicalAddrT = 1 << 12;
+
+pub type IA32eAddrT = u64;
 
 pub trait AddressSpace {
     type AddrT;
@@ -40,7 +46,7 @@ mod kvmi_physical {
     }
 
     impl AddressSpace for KVMIPhysical {
-        type AddrT = u64;
+        type AddrT = PhysicalAddrT;
     }
 
     impl KVMIPhysical {
@@ -52,22 +58,26 @@ mod kvmi_physical {
             &self.dom
         }
 
-        pub async fn read(
-            &self,
-            addr: <Self as AddressSpace>::AddrT,
-            sz: usize,
-        ) -> Result<Vec<u8>> {
+        pub async fn read(&self, addr: PhysicalAddrT, sz: usize) -> Result<Vec<u8>> {
+            Self::validate(addr, sz)?;
             let data = self.dom.send(ReadPhysical::new(addr, sz as u64)).await?;
             Ok(data)
         }
 
-        pub async fn write(
-            &self,
-            addr: <Self as AddressSpace>::AddrT,
-            data: Vec<u8>,
-        ) -> Result<()> {
+        pub async fn write(&self, addr: PhysicalAddrT, data: Vec<u8>) -> Result<()> {
+            Self::validate(addr, data.len())?;
             self.dom.send(WritePhysical::new(addr, data)).await?;
             Ok(())
+        }
+
+        // validate if the access is across page boundary
+        fn validate(addr: PhysicalAddrT, sz: usize) -> Result<()> {
+            let offset = addr & ADDR_MASK;
+            if offset + sz as PhysicalAddrT > PHYSICAL_PAGE_SZ {
+                Err(Error::PageBoundary)
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -81,19 +91,19 @@ mod kvmi_physical {
 #[derive(Clone)]
 pub struct IA32eVirtual {
     base: Arc<KVMIPhysical>,
-    ptb: <KVMIPhysical as AddressSpace>::AddrT,
+    ptb: PhysicalAddrT,
 }
 
 impl AddressSpace for IA32eVirtual {
-    type AddrT = u64;
+    type AddrT = IA32eAddrT;
 }
 
 impl IA32eVirtual {
-    pub fn new(base: Arc<KVMIPhysical>, ptb: <KVMIPhysical as AddressSpace>::AddrT) -> Self {
+    pub fn new(base: Arc<KVMIPhysical>, ptb: PhysicalAddrT) -> Self {
         Self { base, ptb }
     }
 
-    pub fn get_ptb(&self) -> <Self as AddressSpace>::AddrT {
+    pub fn get_ptb(&self) -> PhysicalAddrT {
         self.ptb
     }
 
@@ -101,15 +111,11 @@ impl IA32eVirtual {
         &self.base
     }
 
-    pub fn set_ptb(&mut self, ptb: <KVMIPhysical as AddressSpace>::AddrT) {
+    pub fn set_ptb(&mut self, ptb: PhysicalAddrT) {
         self.ptb = ptb;
     }
 
-    pub async fn read(
-        &self,
-        v_addr: <Self as AddressSpace>::AddrT,
-        sz: usize,
-    ) -> Result<Option<Vec<u8>>> {
+    pub async fn read(&self, v_addr: IA32eAddrT, sz: usize) -> Result<Option<Vec<u8>>> {
         let p_addr = self.translate_v2p(v_addr).await?;
         if let Some(p_addr) = p_addr {
             self.base.read(p_addr, sz).await.map(Some)
@@ -118,11 +124,7 @@ impl IA32eVirtual {
         }
     }
 
-    pub async fn write(
-        &self,
-        v_addr: <Self as AddressSpace>::AddrT,
-        data: Vec<u8>,
-    ) -> Result<Option<()>> {
+    pub async fn write(&self, v_addr: IA32eAddrT, data: Vec<u8>) -> Result<Option<()>> {
         let p_addr = self.translate_v2p(v_addr).await?;
         if let Some(p_addr) = p_addr {
             self.base.write(p_addr, data).await.map(|_| Some(()))
@@ -131,10 +133,7 @@ impl IA32eVirtual {
         }
     }
 
-    pub async fn translate_v2p(
-        &self,
-        v_addr: <Self as AddressSpace>::AddrT,
-    ) -> Result<Option<<KVMIPhysical as AddressSpace>::AddrT>> {
+    pub async fn translate_v2p(&self, v_addr: IA32eAddrT) -> Result<Option<PhysicalAddrT>> {
         let mut base = self.ptb;
         let mut level: u32 = 4;
         let result = loop {
@@ -164,7 +163,7 @@ impl IA32eVirtual {
     }
 
     // Returns (gpa, PG, present)
-    fn read_entry(entry: u64) -> (<KVMIPhysical as AddressSpace>::AddrT, bool, bool) {
+    fn read_entry(entry: u64) -> (PhysicalAddrT, bool, bool) {
         let present = (entry & P_MASK) != 0;
         if present {
             let pg = (entry & PG_MASK) != 0;

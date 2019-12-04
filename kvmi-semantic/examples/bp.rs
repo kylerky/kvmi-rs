@@ -179,7 +179,7 @@ async fn handle_bp(
 
 async fn handle_ss(
     dom: &Domain,
-    gpa: <KVMIPhysical as AddressSpace>::AddrT,
+    gpa: PhysicalAddrT,
     event: &Event,
     _ss: &KvmiEventSingleStep,
 ) -> Result<(), Error> {

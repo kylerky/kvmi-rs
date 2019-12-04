@@ -155,7 +155,7 @@ pub async fn by_physical_mem_scan(
             .map(|(proc_offset, dtb, flink)| {
                 let dtb = u64::from_ne_bytes(dtb.unwrap().try_into().unwrap());
                 let flink = u64::from_ne_bytes(flink.unwrap().try_into().unwrap());
-                (proc_offset, dtb, flink)
+                (proc_offset, dtb & CR3_MASK, flink)
             })
             .filter(|(_, dtb, flink)| *flink > 0 && *dtb > 0 && *dtb < addr_range.end);
 

@@ -72,7 +72,6 @@ pub async fn by_eprocess_list_traversal(
         if let Some(pid) = v_space.read(process + pid_rva, PTR_SZ).await? {
             let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
             if pid == SYSTEM_PID {
-                // let dtb = super::read_struct_field(dom, process, dtb_rva, PTR_SZ, pt_base).await?;
                 let dtb = v_space.read(process + dtb_rva, PTR_SZ).await?;
                 if let Some(dtb) = dtb {
                     let dtb = u64::from_ne_bytes(dtb[..].try_into().unwrap());
@@ -145,7 +144,6 @@ pub async fn traverse_process_list(
             })
             .filter(|l| !seen.contains(l) && *l >= links_rva)
             .collect();
-        debug!("links: {:x?}", links);
         for l in links {
             processes.push(l);
             seen.insert(l);
