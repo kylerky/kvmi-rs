@@ -9,7 +9,7 @@ use async_std::sync::Arc;
 
 use std::convert::TryInto;
 
-use kvmi::message::ReadPhysical;
+use kvmi::message::{ReadPhysical, WritePhysical};
 
 // [12..52] bit of the entry
 const ENTRY_POINTER_MASK: u64 = (!0u64) << 24 >> 12;
@@ -32,6 +32,7 @@ cfg_if! {
     }
 }
 
+#[allow(dead_code)]
 mod kvmi_physical {
     use super::*;
     pub struct KVMIPhysical {
@@ -65,6 +66,7 @@ mod kvmi_physical {
             addr: <Self as AddressSpace>::AddrT,
             data: Vec<u8>,
         ) -> Result<()> {
+            self.dom.send(WritePhysical::new(addr, data)).await?;
             Ok(())
         }
     }

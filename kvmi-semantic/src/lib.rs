@@ -1,16 +1,28 @@
 #[cfg(test)]
 mod tests;
 
+pub mod event;
+pub use memory::address_space;
+
+pub use kvmi::{Action, HSToWire};
+
+use event::*;
+
+mod tracing;
+
 mod memory;
-use memory::address_space::{IA32eVirtual, KVMIPhysical};
+use memory::address_space::{AddressSpace, IA32eVirtual, KVMIPhysical};
 use memory::process::{self, PSChanT};
 
 use async_std::io::prelude::*;
 use async_std::os::unix::io::AsRawFd;
-use async_std::sync::{self, Arc, Receiver};
+use async_std::sync::{Arc, Receiver};
 
-use kvmi::message::{GetRegisters, GetRegistersReply};
-use kvmi::{DomainBuilder, Event, HSToWire};
+use kvmi::message::{
+    CommonEventReply, ControlEvent, GetRegisters, GetRegistersReply, GetVCPUNum, PauseVCPUs,
+    SetSingleStep,
+};
+use kvmi::DomainBuilder;
 
 use log::{debug, info};
 
@@ -32,8 +44,8 @@ type Result<T> = std::result::Result<T, Error>;
 
 pub struct Domain {
     v_space: IA32eVirtual,
-    event_rx: sync::Receiver<Event>,
-    kernel_base_va: u64,
+    event_rx: Receiver<Event>,
+    kernel_base_va: <IA32eVirtual as AddressSpace>::AddrT,
     profile: RekallProfile,
 }
 
@@ -164,9 +176,85 @@ impl Domain {
         }
         Ok(())
     }
+
+    pub fn get_event_stream(&self) -> &Receiver<Event> {
+        &self.event_rx
+    }
+
+    pub async fn get_vcpu_num(&self) -> Result<u32> {
+        let dom = self.v_space.get_base().get_dom();
+        let num = dom.send(GetVCPUNum).await?;
+        Ok(num)
+    }
+
+    pub async fn pause_vm(&self) -> Result<()> {
+        let dom = self.v_space.get_base().get_dom();
+        let num = dom.send(GetVCPUNum).await?;
+        dom.send(PauseVCPUs::new(num).unwrap()).await?;
+        Ok(())
+    }
+
+    pub async fn toggle_event(&self, vcpu: u16, kind: EventKind, enable: bool) -> Result<()> {
+        let dom = self.v_space.get_base().get_dom();
+        dom.send(ControlEvent::new(vcpu, kind, enable)).await?;
+        Ok(())
+    }
+
+    pub async fn reply(&self, event: &Event, action: Action) -> Result<()> {
+        let dom = self.v_space.get_base().get_dom();
+        dom.send(CommonEventReply::new(event, action).unwrap())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn resume_from_bp(
+        &self,
+        orig: u8,
+        event: &Event,
+        extra: &KvmiEventBreakpoint,
+        enable_ss: bool,
+    ) -> Result<()> {
+        tracing::resume_from_bp(&self.v_space, orig, event, extra, enable_ss).await
+    }
+
+    pub async fn set_bp_by_physical(
+        &self,
+        gpa: <KVMIPhysical as AddressSpace>::AddrT,
+    ) -> Result<()> {
+        debug!("Setting breakpoint at 0x{:x?}", gpa);
+        tracing::set_bp_by_physical(self.v_space.get_base(), gpa).await
+    }
+
+    pub async fn toggle_single_step(&self, vcpu: u16, enable: bool) -> Result<()> {
+        let dom = self.v_space.get_base().get_dom();
+        dom.send(SetSingleStep::new(vcpu, enable)).await?;
+        Ok(())
+    }
+
+    pub fn get_ksymbol_offset(
+        &self,
+        symbol: &str,
+    ) -> Result<<IA32eVirtual as AddressSpace>::AddrT> {
+        get_ksymbol_offset(&self.profile, symbol)
+    }
+
+    pub fn get_kfunc_offset(&self, func: &str) -> Result<<IA32eVirtual as AddressSpace>::AddrT> {
+        get_kfunc_offset(&self.profile, func)
+    }
+
+    pub fn get_kernel_base_va(&self) -> <IA32eVirtual as AddressSpace>::AddrT {
+        self.kernel_base_va
+    }
+
+    pub fn get_vspace(&self) -> &IA32eVirtual {
+        &self.v_space
+    }
 }
 
-fn get_ksymbol_offset(profile: &RekallProfile, symbol: &str) -> Result<u64> {
+fn get_ksymbol_offset(
+    profile: &RekallProfile,
+    symbol: &str,
+) -> Result<<IA32eVirtual as AddressSpace>::AddrT> {
     profile
         .constants
         .get(symbol)
@@ -174,11 +262,22 @@ fn get_ksymbol_offset(profile: &RekallProfile, symbol: &str) -> Result<u64> {
         .ok_or_else(|| Error::Profile(format!("Missing {}", symbol)))
 }
 
+fn get_kfunc_offset(
+    profile: &RekallProfile,
+    func: &str,
+) -> Result<<IA32eVirtual as AddressSpace>::AddrT> {
+    profile
+        .functions
+        .get(func)
+        .copied()
+        .ok_or_else(|| Error::Profile(format!("Missing {}", func)))
+}
+
 fn get_struct_field_offset(
     profile: &RekallProfile,
     struct_name: &str,
     field_name: &str,
-) -> Result<u64> {
+) -> Result<<IA32eVirtual as AddressSpace>::AddrT> {
     let struct_arr = profile
         .structs
         .get(struct_name)
@@ -223,6 +322,7 @@ pub enum Error {
     Profile(String),
     Unsupported,
     PageTable,
+    WrongEvent,
 }
 
 impl Display for Error {
@@ -233,6 +333,7 @@ impl Display for Error {
             KernelVAddr => write!(f, "failed to get the virtual address of the kernel"),
             KernelPAddr => write!(f, "failed to get the physical address of the kernel"),
             PageTable => write!(f, "failed to find the page tableof the kernel"),
+            WrongEvent => write!(f, "Calling function using mismatched event"),
             KVMI(e) => write!(f, "{}", e),
             Profile(e) => write!(f, "Error in JSON profile: {}", e),
         }
@@ -253,6 +354,7 @@ impl From<Error> for io::Error {
             KernelVAddr => io::Error::new(io::ErrorKind::InvalidData, e),
             KernelPAddr => io::Error::new(io::ErrorKind::InvalidData, e),
             PageTable => io::Error::new(io::ErrorKind::InvalidData, e),
+            WrongEvent => io::Error::new(io::ErrorKind::InvalidInput, e),
             KVMI(kvmi_err) => kvmi_err.into(),
             Profile(_) => io::Error::new(io::ErrorKind::InvalidData, e),
         }

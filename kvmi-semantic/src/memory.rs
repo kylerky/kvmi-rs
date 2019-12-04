@@ -179,7 +179,7 @@ pub async fn by_physical_mem_scan(
     Ok(None)
 }
 
-pub async fn verify_by_user_shared(
+async fn verify_by_user_shared(
     addr_space: &IA32eVirtual,
     major_rva: u64,
     minor_rva: u64,
@@ -204,7 +204,7 @@ pub async fn verify_by_user_shared(
     }
 }
 
-pub async fn verify_by_thread_list(
+async fn verify_by_thread_list(
     addr_space: &IA32eVirtual,
     flink: u64,
     flink_rva: u64,
@@ -225,7 +225,7 @@ pub async fn verify_by_thread_list(
     Ok(false)
 }
 
-pub fn get_kernel_va_from(msrs: &HashMap<u32, u64>, profile: &RekallProfile) -> Result<u64> {
+fn get_kernel_va_from(msrs: &HashMap<u32, u64>, profile: &RekallProfile) -> Result<u64> {
     debug!("Finding kernel virtual address using KiSystemCall64Shadow & KiSystemCall32Shadow");
 
     let functions = &profile.functions;
