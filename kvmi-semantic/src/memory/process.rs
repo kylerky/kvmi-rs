@@ -1,6 +1,7 @@
-use super::address_space::IA32eVirtual;
+use super::address_space::{IA32eAddrT, IA32eVirtual};
 use super::CR3_MASK;
-use crate::{RekallProfile, Result};
+use crate::event::kvm_sregs;
+use crate::{Error, RekallProfile, Result};
 use crate::{BLINK, EPROCESS, FLINK, LIST_ENTRY, PTR_SZ};
 
 use log::debug;
@@ -19,8 +20,8 @@ use futures::stream::StreamExt;
 
 const SYSTEM_PID: u64 = 4;
 
-pub type PSChanT = Result<u64>;
-pub async fn by_ps_init_sys(
+pub(crate) type PSChanT = Result<u64>;
+pub(crate) async fn by_ps_init_sys(
     v_space: &IA32eVirtual,
     kernel_base_va: u64,
     profile: &RekallProfile,
@@ -38,7 +39,7 @@ pub async fn by_ps_init_sys(
     Ok(None)
 }
 
-pub async fn process_list_traversal<F, FR>(
+pub(crate) async fn process_list_traversal<F, FR>(
     v_space: IA32eVirtual,
     fut: F,
     head: u64,
@@ -149,4 +150,39 @@ pub async fn traverse_process_list(
             seen.insert(l);
         }
     }
+}
+
+pub async fn get_current_process(
+    v_space: &IA32eVirtual,
+    sregs: &kvm_sregs,
+    profile: &RekallProfile,
+) -> Result<IA32eAddrT> {
+    let process_rva = crate::get_struct_field_offset(profile, "_KTHREAD", "Process")?;
+
+    let thread_ptr = get_current_thread(v_space, sregs, profile).await?;
+    let process_ptr = v_space
+        .read(thread_ptr + process_rva, PTR_SZ)
+        .await?
+        .ok_or(Error::InvalidVAddr)?;
+    let process_ptr = u64::from_ne_bytes(process_ptr[..].try_into().unwrap());
+
+    Ok(process_ptr)
+}
+
+pub async fn get_current_thread(
+    v_space: &IA32eVirtual,
+    sregs: &kvm_sregs,
+    profile: &RekallProfile,
+) -> Result<IA32eAddrT> {
+    let prcb_rva = crate::get_struct_field_offset(profile, "_KPCR", "Prcb")?;
+    let curr_thread_rva = crate::get_struct_field_offset(profile, "_KPRCB", "CurrentThread")?;
+
+    let gs_base = sregs.gs.base;
+    let thread_ptr = v_space
+        .read(gs_base + prcb_rva + curr_thread_rva, PTR_SZ)
+        .await?
+        .ok_or(Error::InvalidVAddr)?;
+    let thread_ptr = u64::from_ne_bytes(thread_ptr[..].try_into().unwrap());
+
+    Ok(thread_ptr)
 }

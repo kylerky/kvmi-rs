@@ -1,5 +1,5 @@
 pub mod address_space;
-pub mod process;
+pub(super) mod process;
 
 use crate::{Error, RekallProfile, Result};
 use crate::{
@@ -7,7 +7,7 @@ use crate::{
     PTR_SZ,
 };
 
-use address_space::{IA32eVirtual, KVMIPhysical};
+use address_space::{IA32eAddrT, IA32eVirtual, KVMIPhysical};
 
 use kvmi::message::{GetMaxGfn, GetRegistersReply};
 
@@ -23,7 +23,7 @@ use regex::bytes::Regex;
 
 // [12..52] bit of the entry
 const KI_USER_SHARED_DATA_PTR: u64 = 0xffff_f780_0000_0000;
-const CR3_MASK: u64 = (!0u64) << 12;
+pub(super) const CR3_MASK: u64 = (!0u64) << 12;
 
 async fn read_kptr(
     addr_space: &IA32eVirtual,
@@ -37,7 +37,7 @@ async fn read_kptr(
     Ok(data.map(|d| u64::from_ne_bytes(d[..].try_into().unwrap())))
 }
 
-pub async fn get_system_page_table(
+pub(super) async fn get_system_page_table(
     v_space: &mut IA32eVirtual,
     kernel_base_va: u64,
     profile: &RekallProfile,
@@ -97,7 +97,7 @@ pub async fn get_system_page_table(
 }
 
 #[allow(clippy::trivial_regex)]
-pub async fn by_physical_mem_scan(
+pub(super) async fn by_physical_mem_scan(
     v_space: &IA32eVirtual,
     profile: &RekallProfile,
     addr_range: Range<u64>,
@@ -161,8 +161,7 @@ pub async fn by_physical_mem_scan(
 
         for (_offset, dtb, flink) in matches {
             debug!("verifying dtb: 0x{:x?}", dtb);
-            let mut v_space2 = v_space.clone();
-            v_space2.set_ptb(dtb);
+            let v_space2 = IA32eVirtual::new(Arc::clone(v_space.get_base()), dtb);
             if !verify_by_user_shared(&v_space2, major_rva, minor_rva).await? {
                 debug!("dtb: 0x{:x?} filtered by user shared data", dtb);
                 continue;
@@ -254,7 +253,7 @@ fn get_kernel_va_from(msrs: &HashMap<u32, u64>, profile: &RekallProfile) -> Resu
     Ok(va[0])
 }
 
-pub async fn find_kernel_addr(
+pub(super) async fn find_kernel_addr(
     p_space: Arc<KVMIPhysical>,
     reply: &GetRegistersReply,
     profile: &RekallProfile,

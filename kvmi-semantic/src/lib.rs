@@ -10,7 +10,7 @@ use event::*;
 
 pub mod tracing;
 
-mod memory;
+pub mod memory;
 use memory::address_space::{IA32eAddrT, IA32eVirtual, KVMIPhysical, PhysicalAddrT};
 use memory::process::{self, PSChanT};
 use memory::CR3_MASK;
@@ -45,7 +45,8 @@ extern crate lazy_static;
 type Result<T> = std::result::Result<T, Error>;
 
 pub struct Domain {
-    v_space: IA32eVirtual,
+    k_vspace: IA32eVirtual,
+    vspaces: HashMap<PhysicalAddrT, IA32eVirtual>,
     event_rx: Receiver<Event>,
     kernel_base_va: IA32eAddrT,
     profile: RekallProfile,
@@ -101,28 +102,28 @@ impl Domain {
         }
 
         let p_space = Arc::new(KVMIPhysical::from(dom));
-        let (kernel_base_va, _kernel_base_pa, mut v_space) =
+        let (kernel_base_va, _kernel_base_pa, mut k_vspace) =
             memory::find_kernel_addr(p_space, &reply, &profile).await?;
 
         if let Some(ptb) = ptb {
-            v_space.set_ptb(ptb);
-            Ok(Self {
-                v_space,
-                event_rx,
-                kernel_base_va,
-                profile,
-            })
-        } else if memory::get_system_page_table(&mut v_space, kernel_base_va, &profile).await? {
-            info!("Page table base of System: 0x{:x?}", v_space.get_ptb());
-            Ok(Self {
-                v_space,
-                event_rx,
-                kernel_base_va,
-                profile,
-            })
+            k_vspace.set_ptb(ptb);
+        } else if memory::get_system_page_table(&mut k_vspace, kernel_base_va, &profile).await? {
+            info!("Page table base of System: 0x{:x?}", k_vspace.get_ptb());
         } else {
-            Err(Error::PageTable)
+            return Err(Error::PageTable);
         }
+
+        let vspaces = [(k_vspace.get_ptb(), k_vspace.clone())]
+            .iter()
+            .cloned()
+            .collect();
+        Ok(Self {
+            k_vspace,
+            vspaces,
+            event_rx,
+            kernel_base_va,
+            profile,
+        })
     }
 
     fn get_paging_mode_from(reply: &GetRegistersReply) -> PageMode {
@@ -152,8 +153,8 @@ impl Domain {
         let process_head =
             self.kernel_base_va + get_ksymbol_offset(&self.profile, "PsActiveProcessHead")?;
         process::process_list_traversal(
-            self.v_space.clone(),
-            |processes| Self::print_eprocess(&self.v_space, processes, &self.profile),
+            self.k_vspace.clone(),
+            |processes| Self::print_eprocess(&self.k_vspace, processes, &self.profile),
             process_head,
             &self.profile,
         )
@@ -184,26 +185,26 @@ impl Domain {
     }
 
     pub async fn get_vcpu_num(&self) -> Result<u32> {
-        let dom = self.v_space.get_base().get_dom();
+        let dom = self.k_vspace.get_base().get_dom();
         let num = dom.send(GetVCPUNum).await?;
         Ok(num)
     }
 
     pub async fn pause_vm(&self) -> Result<()> {
-        let dom = self.v_space.get_base().get_dom();
+        let dom = self.k_vspace.get_base().get_dom();
         let num = dom.send(GetVCPUNum).await?;
         dom.send(PauseVCPUs::new(num).unwrap()).await?;
         Ok(())
     }
 
     pub async fn toggle_event(&self, vcpu: u16, kind: EventKind, enable: bool) -> Result<()> {
-        let dom = self.v_space.get_base().get_dom();
+        let dom = self.k_vspace.get_base().get_dom();
         dom.send(ControlEvent::new(vcpu, kind, enable)).await?;
         Ok(())
     }
 
     pub async fn reply(&self, event: &Event, action: Action) -> Result<()> {
-        let dom = self.v_space.get_base().get_dom();
+        let dom = self.k_vspace.get_base().get_dom();
         dom.send(CommonEventReply::new(event, action).unwrap())
             .await?;
         Ok(())
@@ -216,15 +217,15 @@ impl Domain {
         extra: &KvmiEventBreakpoint,
         enable_ss: bool,
     ) -> Result<()> {
-        tracing::resume_from_bp(&self.v_space, orig, event, extra, enable_ss).await
+        tracing::resume_from_bp(&self.k_vspace, orig, event, extra, enable_ss).await
     }
 
     pub async fn set_bp_by_physical(&self, gpa: PhysicalAddrT) -> Result<()> {
-        tracing::set_bp_by_physical(self.v_space.get_base(), gpa).await
+        tracing::set_bp_by_physical(self.k_vspace.get_base(), gpa).await
     }
 
     pub async fn toggle_single_step(&self, vcpu: u16, enable: bool) -> Result<()> {
-        let dom = self.v_space.get_base().get_dom();
+        let dom = self.k_vspace.get_base().get_dom();
         dom.send(SetSingleStep::new(vcpu, enable)).await?;
         Ok(())
     }
@@ -241,8 +242,24 @@ impl Domain {
         self.kernel_base_va
     }
 
-    pub fn get_vspace(&self) -> &IA32eVirtual {
-        &self.v_space
+    pub fn get_k_vspace(&self) -> &IA32eVirtual {
+        &self.k_vspace
+    }
+
+    pub fn get_vspace(&mut self, ptb: PhysicalAddrT) -> &IA32eVirtual {
+        let base = self.k_vspace.get_base();
+        self.vspaces
+            .entry(ptb)
+            .or_insert_with(|| IA32eVirtual::new(Arc::clone(base), ptb))
+    }
+
+    pub fn get_profile(&self) -> &RekallProfile {
+        &self.profile
+    }
+
+    pub async fn get_current_process(&self, sregs: &kvm_sregs) -> Result<IA32eAddrT> {
+        let process = process::get_current_process(&self.k_vspace, sregs, &self.profile).await?;
+        Ok(process)
     }
 }
 
