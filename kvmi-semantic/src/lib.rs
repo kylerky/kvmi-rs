@@ -221,6 +221,10 @@ impl Domain {
         tracing::resume_from_bp(&self.k_vspace, orig, event, extra, enable_ss).await
     }
 
+    pub async fn clear_bp_by_physical(&self, p_addr: PhysicalAddrT, orig: u8) -> Result<()> {
+        self.k_vspace.get_base().write(p_addr, vec![orig]).await
+    }
+
     pub async fn set_bp_by_physical(&self, gpa: PhysicalAddrT) -> Result<()> {
         tracing::set_bp_by_physical(self.k_vspace.get_base(), gpa).await
     }
@@ -233,6 +237,14 @@ impl Domain {
 
     pub fn get_ksymbol_offset(&self, symbol: &str) -> Result<IA32eAddrT> {
         get_ksymbol_offset(&self.profile, symbol)
+    }
+
+    pub fn get_struct_field_offset(
+        profile: &RekallProfile,
+        struct_name: &str,
+        field_name: &str,
+    ) -> Result<IA32eAddrT> {
+        get_struct_field_offset(profile, struct_name, field_name)
     }
 
     pub fn get_kfunc_offset(&self, func: &str) -> Result<IA32eAddrT> {
@@ -261,6 +273,10 @@ impl Domain {
     pub async fn get_current_process(&self, sregs: &kvm_sregs) -> Result<IA32eAddrT> {
         let process = process::get_current_process(&self.k_vspace, sregs, &self.profile).await?;
         Ok(process)
+    }
+
+    pub async fn read_utf16(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
+        memory::read_utf16(v_space, addr).await
     }
 }
 

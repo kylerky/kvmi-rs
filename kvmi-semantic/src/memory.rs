@@ -25,6 +25,8 @@ use regex::bytes::Regex;
 const KI_USER_SHARED_DATA_PTR: u64 = 0xffff_f780_0000_0000;
 pub(super) const CR3_MASK: u64 = (!0u64) << 12;
 
+const UNICODE_STRING_SZ: usize = 16;
+
 async fn read_kptr(
     addr_space: &IA32eVirtual,
     symbol: &str,
@@ -281,4 +283,26 @@ pub(super) async fn find_kernel_addr(
     info!("kernel base physical address: 0x{:x?}", kernel_base_pa);
 
     Ok((kernel_base_va, kernel_base_pa, v_space))
+}
+
+pub(super) async fn read_utf16(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
+    let str_struct = v_space
+        .read(addr, UNICODE_STRING_SZ)
+        .await?
+        .ok_or(Error::InvalidVAddr)?;
+
+    let length = u16::from_ne_bytes(str_struct[..2].try_into().unwrap());
+    let buffer_ptr = IA32eAddrT::from_ne_bytes(str_struct[8..].try_into().unwrap());
+
+    let buffer = v_space
+        .read(buffer_ptr, length as usize)
+        .await?
+        .ok_or(Error::InvalidVAddr)?;
+    let buffer: Vec<u16> = buffer
+        .chunks_exact(2)
+        .map(|bytes| u16::from_ne_bytes(bytes.try_into().unwrap()))
+        .collect();
+    let res = String::from_utf16(&buffer[..])?;
+
+    Ok(res)
 }
