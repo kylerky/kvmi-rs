@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use kvmi_semantic::address_space::*;
 use kvmi_semantic::event::*;
+use kvmi_semantic::memory;
 use kvmi_semantic::tracing::functions::MSx64;
 use kvmi_semantic::{Action, Domain, Error, HSToWire, RekallProfile};
 
@@ -135,7 +136,8 @@ async fn listen(mut opt: Opt) -> Result<(), io::Error> {
         )
         .await?;
 
-        let v_addr = dom.get_kernel_base_va() + dom.get_kfunc_offset("NtOpenFile")?;
+        let profile = dom.get_profile();
+        let v_addr = dom.get_kernel_base_va() + profile.get_kfunc_offset("NtOpenFile")?;
         let v_space = dom.get_k_vspace();
         let p_space = v_space.get_base();
         let gpa = v_space
@@ -261,9 +263,9 @@ async fn handle_bp(
 
 async fn get_pid(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<u64, Error> {
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
+    let profile = dom.get_profile();
 
-    let uid_rva =
-        Domain::get_struct_field_offset(dom.get_profile(), "_EPROCESS", "UniqueProcessId")?;
+    let uid_rva = profile.get_struct_field_offset("_EPROCESS", "UniqueProcessId")?;
     let arch = event.get_arch();
     let process = dom.get_current_process(&arch.sregs).await?;
     let pid = v_space
@@ -276,6 +278,7 @@ async fn get_pid(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<u
 
 async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<(), Error> {
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
+    let profile = dom.get_profile();
 
     let regs = &event.get_arch().regs;
     let args = MSx64::new(&v_space, regs, 3).await?;
@@ -284,8 +287,7 @@ async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Re
         return Ok(());
     }
 
-    let fname_rva =
-        Domain::get_struct_field_offset(dom.get_profile(), "_OBJECT_ATTRIBUTES", "ObjectName")?;
+    let fname_rva = profile.get_struct_field_offset("_OBJECT_ATTRIBUTES", "ObjectName")?;
     let fname_ptr = v_space
         .read(obj_attr_ptr + fname_rva, 8)
         .await?
@@ -294,7 +296,7 @@ async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Re
     if fname_ptr == 0 || !IA32eVirtual::is_canonical(fname_ptr) {
         return Ok(());
     }
-    let fname = Domain::read_utf16(&v_space, fname_ptr).await?;
+    let fname = memory::read_utf16(&v_space, fname_ptr).await?;
     println!("fname: {}", fname);
 
     Ok(())

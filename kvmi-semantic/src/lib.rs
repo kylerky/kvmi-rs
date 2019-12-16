@@ -235,22 +235,6 @@ impl Domain {
         Ok(())
     }
 
-    pub fn get_ksymbol_offset(&self, symbol: &str) -> Result<IA32eAddrT> {
-        get_ksymbol_offset(&self.profile, symbol)
-    }
-
-    pub fn get_struct_field_offset(
-        profile: &RekallProfile,
-        struct_name: &str,
-        field_name: &str,
-    ) -> Result<IA32eAddrT> {
-        get_struct_field_offset(profile, struct_name, field_name)
-    }
-
-    pub fn get_kfunc_offset(&self, func: &str) -> Result<IA32eAddrT> {
-        get_kfunc_offset(&self.profile, func)
-    }
-
     pub fn get_kernel_base_va(&self) -> IA32eAddrT {
         self.kernel_base_va
     }
@@ -273,10 +257,6 @@ impl Domain {
     pub async fn get_current_process(&self, sregs: &kvm_sregs) -> Result<IA32eAddrT> {
         let process = process::get_current_process(&self.k_vspace, sregs, &self.profile).await?;
         Ok(process)
-    }
-
-    pub async fn read_utf16(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
-        memory::read_utf16(v_space, addr).await
     }
 }
 
@@ -337,6 +317,24 @@ pub struct RekallProfile {
 
     #[serde(rename(deserialize = "$STRUCTS"))]
     pub structs: HashMap<String, Value>,
+}
+
+impl RekallProfile {
+    pub fn get_ksymbol_offset(&self, symbol: &str) -> Result<IA32eAddrT> {
+        get_ksymbol_offset(self, symbol)
+    }
+
+    pub fn get_struct_field_offset(
+        &self,
+        struct_name: &str,
+        field_name: &str,
+    ) -> Result<IA32eAddrT> {
+        get_struct_field_offset(self, struct_name, field_name)
+    }
+
+    pub fn get_kfunc_offset(&self, func: &str) -> Result<IA32eAddrT> {
+        get_kfunc_offset(self, func)
+    }
 }
 
 impl error::Error for Error {}

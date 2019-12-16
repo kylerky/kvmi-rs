@@ -285,7 +285,7 @@ pub(super) async fn find_kernel_addr(
     Ok((kernel_base_va, kernel_base_pa, v_space))
 }
 
-pub(super) async fn read_utf16(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
+pub async fn read_utf16(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
     let str_struct = v_space
         .read(addr, UNICODE_STRING_SZ)
         .await?
