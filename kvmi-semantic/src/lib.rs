@@ -8,11 +8,12 @@ pub use kvmi::{Action, HSToWire};
 
 use event::*;
 
-mod tracing;
+pub mod tracing;
 
 mod memory;
 use memory::address_space::{IA32eAddrT, IA32eVirtual, KVMIPhysical, PhysicalAddrT};
 use memory::process::{self, PSChanT};
+use memory::CR3_MASK;
 
 use async_std::io::prelude::*;
 use async_std::os::unix::io::AsRawFd;
@@ -32,6 +33,7 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::mem;
+use std::string::FromUtf16Error;
 
 use serde::Deserialize;
 
@@ -95,7 +97,7 @@ impl Domain {
 
         match paging {
             PageMode::IA32e => (),
-            _ => return Err(Error::Unsupported),
+            _ => return Err(Error::Unsupported(String::from("unsupported paging mode"))),
         }
 
         let p_space = Arc::new(KVMIPhysical::from(dom));
@@ -287,6 +289,10 @@ fn get_struct_field_offset(
     Ok(offset)
 }
 
+pub fn get_ptb_from(sregs: &kvm_sregs) -> PhysicalAddrT {
+    sregs.cr3 & CR3_MASK
+}
+
 #[derive(Deserialize)]
 pub struct RekallProfile {
     #[serde(rename(deserialize = "$FUNCTIONS"))]
@@ -307,24 +313,28 @@ pub enum Error {
     KernelVAddr,
     KernelPAddr,
     Profile(String),
-    Unsupported,
+    Unsupported(String),
     PageTable,
     WrongEvent,
     PageBoundary,
+    InvalidVAddr,
+    FromUtf16(FromUtf16Error),
 }
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         use Error::*;
         match self {
-            Unsupported => write!(f, "Guest not supported"),
+            Unsupported(s) => write!(f, "Operation not supported: {}", s),
             KernelVAddr => write!(f, "failed to get the virtual address of the kernel"),
             KernelPAddr => write!(f, "failed to get the physical address of the kernel"),
-            PageTable => write!(f, "failed to find the page tableof the kernel"),
+            PageTable => write!(f, "failed to find the page table of the kernel"),
             WrongEvent => write!(f, "Calling function using mismatched event"),
             PageBoundary => write!(f, "Reading or writing across page boundary"),
+            InvalidVAddr => write!(f, "Reading or writing invalid virtual address"),
             KVMI(e) => write!(f, "{}", e),
             Profile(e) => write!(f, "Error in JSON profile: {}", e),
+            FromUtf16(e) => write!(f, "Error converting from UTF-16: {}", e),
         }
     }
 }
@@ -339,14 +349,17 @@ impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
         use Error::*;
         match e {
-            Unsupported => io::Error::new(io::ErrorKind::Other, e),
-            KernelVAddr => io::Error::new(io::ErrorKind::InvalidData, e),
-            KernelPAddr => io::Error::new(io::ErrorKind::InvalidData, e),
-            PageTable => io::Error::new(io::ErrorKind::InvalidData, e),
+            Unsupported(_) => io::Error::new(io::ErrorKind::Other, e),
+            KernelVAddr | KernelPAddr | PageTable | PageBoundary | InvalidVAddr | Profile(_)
+            | FromUtf16(_) => io::Error::new(io::ErrorKind::InvalidData, e),
             WrongEvent => io::Error::new(io::ErrorKind::InvalidInput, e),
-            PageBoundary => io::Error::new(io::ErrorKind::InvalidData, e),
             KVMI(kvmi_err) => kvmi_err.into(),
-            Profile(_) => io::Error::new(io::ErrorKind::InvalidData, e),
         }
+    }
+}
+
+impl From<FromUtf16Error> for Error {
+    fn from(e: FromUtf16Error) -> Self {
+        Error::FromUtf16(e)
     }
 }

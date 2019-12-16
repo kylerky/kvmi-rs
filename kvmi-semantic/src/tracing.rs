@@ -1,3 +1,5 @@
+pub mod functions;
+
 use crate::event::*;
 use crate::memory::address_space::{IA32eVirtual, KVMIPhysical, PhysicalAddrT};
 use crate::Action;
@@ -7,7 +9,7 @@ use kvmi::message::{BPEventReply, SetSingleStep};
 
 const BP_INSTRUCTION: u8 = 0xcc;
 
-pub async fn resume_from_bp(
+pub(super) async fn resume_from_bp(
     v_space: &IA32eVirtual,
     orig: u8,
     event: &Event,
@@ -18,7 +20,9 @@ pub async fn resume_from_bp(
 
     let insn_len = extra.get_insn_len();
     if insn_len != 1 {
-        return Err(Error::Unsupported);
+        return Err(Error::Unsupported(String::from(
+            "Unsupported encoding of the breakpoint instruction",
+        )));
     }
 
     // clear the breakpoint
@@ -37,7 +41,7 @@ pub async fn resume_from_bp(
     Ok(())
 }
 
-pub async fn set_bp_by_physical(p_space: &KVMIPhysical, addr: PhysicalAddrT) -> Result<()> {
+pub(super) async fn set_bp_by_physical(p_space: &KVMIPhysical, addr: PhysicalAddrT) -> Result<()> {
     p_space.write(addr, vec![BP_INSTRUCTION]).await?;
     Ok(())
 }
