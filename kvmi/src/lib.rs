@@ -36,8 +36,8 @@ extern crate lazy_static;
 mod c_ffi;
 use c_ffi::*;
 pub use c_ffi::{
-    kvm_msr_entry, kvmi_event_arch, kvmi_event_pf, kvmi_get_registers_reply, HSToWire,
-    KvmiEventBreakpoint, KvmiEventCR, KvmiEventPF, KvmiEventSingleStep, PageAccessEntry,
+    kvm_msr_entry, kvm_regs, kvm_sregs, kvmi_event_arch, kvmi_event_pf, kvmi_get_registers_reply,
+    HSToWire, KvmiEventBreakpoint, KvmiEventCR, KvmiEventPF, KvmiEventSingleStep, PageAccessEntry,
 };
 
 mod utils;
@@ -409,10 +409,7 @@ struct ReqHandle {
 
 impl Drop for Domain {
     fn drop(&mut self) {
-        // this is the only Sender for this Domain
-        // dropping it will make deserializer return
-        mem::drop(self.shutdown.take());
-        task::block_on(self.deserializer.take().unwrap());
+        self.close();
     }
 }
 
@@ -502,6 +499,13 @@ impl Domain {
             }
         };
         Ok(msg.construct_reply(result))
+    }
+
+    pub fn close(&mut self) {
+        mem::drop(self.shutdown.take());
+        if let Some(handle) = self.deserializer.take() {
+            task::block_on(handle);
+        }
     }
 
     pub fn get_uuid(&self) -> &[u8] {
