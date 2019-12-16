@@ -275,7 +275,7 @@ pub(super) async fn find_kernel_addr(
     let pt_base = cr3 & CR3_MASK;
     let v_space = IA32eVirtual::new(p_space, pt_base);
 
-    let kernel_base_pa = v_space.translate_v2p(kernel_base_va).await?;
+    let kernel_base_pa = v_space.lookup(kernel_base_va).await?;
 
     let kernel_base_pa = kernel_base_pa.ok_or(Error::KernelPAddr)?;
     info!("kernel base physical address: 0x{:x?}", kernel_base_pa);

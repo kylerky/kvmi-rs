@@ -113,6 +113,7 @@ impl Domain {
             return Err(Error::PageTable);
         }
 
+        k_vspace.flush().await;
         let vspaces = [(k_vspace.get_ptb(), k_vspace.clone())]
             .iter()
             .cloned()
