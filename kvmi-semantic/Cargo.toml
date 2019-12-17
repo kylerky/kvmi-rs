@@ -23,5 +23,5 @@ features = ["std", "perf"]
 pretty_assertions = "0.6"
 env_logger = "0.7"
 structopt = "0.3"
-mockall = "0.5"
+mockall = "0.6"
 signal-hook = "0.1"
