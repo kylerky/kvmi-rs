@@ -34,6 +34,7 @@ use c_ffi::*;
 pub use c_ffi::{
     kvm_msr_entry, kvm_regs, kvm_sregs, kvmi_event_arch, kvmi_event_pf, kvmi_get_registers_reply,
     HSToWire, KvmiEventBreakpoint, KvmiEventCR, KvmiEventPF, KvmiEventSingleStep, PageAccessEntry,
+    PageAccessEntryBuilder,
 };
 
 mod utils;

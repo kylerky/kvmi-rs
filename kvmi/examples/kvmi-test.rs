@@ -15,7 +15,7 @@ use async_std::task;
 
 use kvmi::message::*;
 use kvmi::{
-    Action, Domain, DomainBuilder, Event, EventExtra, EventKind, HSToWire, PageAccessEntry,
+    Action, Domain, DomainBuilder, Event, EventExtra, EventKind, HSToWire, PageAccessEntryBuilder,
 };
 
 use ArgsErrorKind::*;
@@ -168,12 +168,11 @@ async fn start_pf_test(dom: &mut Domain, event: &Event) -> Result<bool, kvmi::Er
     }
 
     let mut msg = SetPageAccess::new();
+    let mut builder = PageAccessEntryBuilder::new(0);
+    builder.set_read().set_execute();
     for i in 0..TEST_PAGE_NUM {
-        msg.push(
-            PageAccessEntry::new(pt_addr + i * PAGE_SIZE)
-                .set_read()
-                .set_execute(),
-        );
+        let entry = builder.gpa(pt_addr + i * PAGE_SIZE).build();
+        msg.push(entry);
     }
     dom.send(msg).await?;
 
