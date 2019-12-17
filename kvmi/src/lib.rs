@@ -1,5 +1,4 @@
 use std::cmp;
-use std::collections::HashMap;
 use std::convert::TryInto;
 use std::error;
 use std::ffi::{CStr, FromBytesWithNulError};
@@ -29,9 +28,6 @@ use mio::{Events, Poll, PollOpt, Ready, Token};
 use futures::future::FutureExt;
 use futures::select;
 use futures::stream::StreamExt;
-
-#[macro_use]
-extern crate lazy_static;
 
 mod c_ffi;
 use c_ffi::*;
@@ -298,7 +294,7 @@ where
             transmute(buf)
         };
 
-        let sz = match EVENT_SZ_MAP.get(&(common.0.event as u32)) {
+        let sz = match get_event_sz(common.0.event as u32) {
             None => {
                 error!("unkown event: {}", common.0.event);
                 return Err(Error::from(ErrorKind::UnknownKVMIEvent));
@@ -306,8 +302,8 @@ where
             Some(s) => s,
         };
 
-        let useful = cmp::min(*sz, rest.len());
-        let extra = Self::get_extra(useful, *sz as usize, rest, &common)?;
+        let useful = cmp::min(sz, rest.len());
+        let extra = Self::get_extra(useful, sz as usize, rest, &common)?;
         Ok(Event { common, extra, seq })
     }
 
@@ -521,24 +517,22 @@ impl Domain {
     }
 }
 
-lazy_static! {
-    static ref EVENT_SZ_MAP: HashMap<u32, usize> = [
-        (KVMI_EVENT_BREAKPOINT, size_of::<KvmiEventBreakpoint>()),
-        (KVMI_EVENT_CREATE_VCPU, 0),
-        (KVMI_EVENT_CR, size_of::<KvmiEventCR>()),
-        (KVMI_EVENT_DESCRIPTOR, size_of::<KvmiEventDescriptor>()),
-        (KVMI_EVENT_HYPERCALL, 0),
-        (KVMI_EVENT_MSR, size_of::<KvmiEventMSR>()),
-        (KVMI_EVENT_PAUSE_VCPU, 0),
-        (KVMI_EVENT_PF, size_of::<KvmiEventPF>()),
-        (KVMI_EVENT_TRAP, size_of::<KvmiEventTrap>()),
-        (KVMI_EVENT_SINGLESTEP, size_of::<KvmiEventSingleStep>()),
-        (KVMI_EVENT_UNHOOK, 0),
-        (KVMI_EVENT_XSETBV, 0),
-    ]
-    .iter()
-    .copied()
-    .collect();
+fn get_event_sz(kind: u32) -> Option<usize> {
+    match kind {
+        KVMI_EVENT_BREAKPOINT => Some(size_of::<KvmiEventBreakpoint>()),
+        KVMI_EVENT_CR => Some(size_of::<KvmiEventCR>()),
+        KVMI_EVENT_DESCRIPTOR => Some(size_of::<KvmiEventDescriptor>()),
+        KVMI_EVENT_MSR => Some(size_of::<KvmiEventMSR>()),
+        KVMI_EVENT_PF => Some(size_of::<KvmiEventPF>()),
+        KVMI_EVENT_TRAP => Some(size_of::<KvmiEventTrap>()),
+        KVMI_EVENT_SINGLESTEP => Some(size_of::<KvmiEventSingleStep>()),
+        KVMI_EVENT_UNHOOK
+        | KVMI_EVENT_XSETBV
+        | KVMI_EVENT_PAUSE_VCPU
+        | KVMI_EVENT_HYPERCALL
+        | KVMI_EVENT_CREATE_VCPU => Some(0),
+        _ => None,
+    }
 }
 
 #[derive(Debug)]
