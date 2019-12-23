@@ -10,13 +10,15 @@ use capnp_rpc::rpc_twoparty_capnp::Side;
 use capnp_rpc::twoparty::{VatId, VatNetwork};
 use capnp_rpc::RpcSystem;
 
-use crate::kvmi_capnp::{consumer, event, publisher, subscription, Access};
+use crate::kvmi_capnp::{consumer, event, publisher, subscription};
 
 use async_std::net::TcpListener;
 use async_std::sync::{self, Receiver, Sender};
 use async_std::task;
 
 use log::error;
+
+use crate::collect::LogChT;
 
 struct Subscription {
     _tx: Sender<()>,
@@ -37,15 +39,11 @@ impl Consumer {
         Self { consumer }
     }
 
-    pub fn push_promise(&self, i: u64) -> Promise<PushRespT, capnp::Error> {
+    pub fn push_promise(&self, event: event::Reader) -> Promise<PushRespT, capnp::Error> {
         let mut req = self.consumer.push_request();
-        let mut event = req.get().init_event();
-        event.set_pid(i);
-        event.set_proc_name("test");
-
-        let mut file = event.init_detail().init_file();
-        file.set_name("fname");
-        file.set_access(Access::Read);
+        if let Err(e) = req.get().set_event(event) {
+            return Promise::err(e);
+        }
         req.send().promise
     }
 }
@@ -98,22 +96,12 @@ impl publisher::Server<event::Owned> for RpcServer {
     }
 }
 
-pub async fn listen(addr: &SocketAddr) -> Result<(), io::Error> {
+pub async fn listen(addr: &SocketAddr, event_log_rx: Receiver<LogChT>) -> Result<(), io::Error> {
     let listener = TcpListener::bind(addr).await?;
 
     let (rpc_server, consumer_rx, close_rx) = RpcServer::new();
     let observer = publisher::ToClient::new(rpc_server).into_client::<capnp_rpc::Server>();
 
-    let (tx, rx) = sync::channel(1);
-    task::spawn(async move {
-        use std::time::Duration;
-        let mut interval = async_std::stream::interval(Duration::from_secs(1));
-        let mut i = 0;
-        while let Some(_) = interval.next().await {
-            tx.send(i).await;
-            i += 1;
-        }
-    });
     while let Some(stream) = listener.incoming().next().await {
         let stream = stream?;
         stream.set_nodelay(true)?;
@@ -121,14 +109,12 @@ pub async fn listen(addr: &SocketAddr) -> Result<(), io::Error> {
 
         let network = VatNetwork::new(reader, writer, Side::Server, Default::default());
         let rpc_system = RpcSystem::new(Box::new(network), Some(observer.clone().client));
-        // if let Err(e) = task::block_on(rpc_system) {
-        //     error!("rpc system error: {}", e);
-        // }
+
         if let Err(e) = task::block_on(streaming(
             rpc_system,
             consumer_rx.clone(),
             close_rx.clone(),
-            rx.clone(),
+            event_log_rx.clone(),
         )) {
             error!("rpc system error: {}", e);
         }
@@ -141,7 +127,7 @@ async fn streaming(
     rpc_system: RpcSystem<VatId>,
     consumer_rx: Receiver<ServerChanT>,
     close_rx: Receiver<()>,
-    event_rx: Receiver<u64>,
+    event_rx: Receiver<LogChT>,
 ) -> Result<(), io::Error> {
     let mut consumer_rx = consumer_rx.fuse();
     let mut close_rx = close_rx.fuse();
@@ -168,10 +154,16 @@ async fn streaming(
                 consumer = None;
                 push_fut = FuturesUnordered::new();
             },
-            event = event_rx.next() => {
+            event_log = event_rx.next() => {
                 if let Some(consumer) = consumer.as_ref() {
-                    if let Some(i) = event {
-                        push_fut.push(consumer.push_promise(i));
+                    if let Some(event_log) = event_log {
+                        push_fut.push(consumer.push_promise(
+                            event_log
+                                .into_reader()
+                                .get_root::<event::Reader>()
+                                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?
+                            )
+                        );
                     }
                 }
             },

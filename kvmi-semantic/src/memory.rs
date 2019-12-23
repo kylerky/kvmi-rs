@@ -108,9 +108,7 @@ pub(super) async fn by_physical_mem_scan(
     flink_rva: u64,
     blink_rva: u64,
 ) -> Result<Option<u64>> {
-    lazy_static! {
-        static ref RE: Regex = Regex::new(r"(?-u)System\x00").unwrap();
-    }
+    let re = Regex::new(r"(?-u)System\x00").unwrap();
     let major_rva = crate::get_struct_field_offset(profile, KUSER_SHARED_DATA, "NtMajorVersion")?;
     let minor_rva = crate::get_struct_field_offset(profile, KUSER_SHARED_DATA, "NtMinorVersion")?;
 
@@ -122,7 +120,7 @@ pub(super) async fn by_physical_mem_scan(
             let p_space = v_space.get_base();
             p_space.read(addr, page_sz).await?
         };
-        let matches = RE
+        let matches = re
             .find_iter(&page[..])
             .map(|mat| {
                 let proc_offset = mat.start() as isize - name_rva;
