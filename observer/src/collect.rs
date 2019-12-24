@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use async_std::os::unix::net::UnixListener;
 use async_std::prelude::*;
 use async_std::sync::Sender;
+use async_std::task;
 
 use log::{debug, error, info};
 
@@ -21,6 +22,47 @@ use crate::kvmi_capnp::event;
 use capnp::message::HeapAllocator;
 
 const CPL_MASK: u16 = 3;
+
+struct EventHandler<'a> {
+    dom: &'a mut Domain,
+    orig_byte: u8,
+    gpa: PhysicalAddrT,
+    log_tx: Sender<LogChT>,
+    bp_set: bool,
+}
+impl<'a> EventHandler<'a> {
+    fn new(dom: &'a mut Domain, orig_byte: u8, gpa: PhysicalAddrT, log_tx: Sender<LogChT>) -> Self {
+        EventHandler {
+            dom,
+            orig_byte,
+            gpa,
+            log_tx,
+            bp_set: false,
+        }
+    }
+
+    async fn handle_event(&mut self, event: Event) -> Result<(), Error> {
+        use EventExtra::*;
+
+        let extra = event.get_extra();
+        match extra {
+            PauseVCPU => handle_pause(self, &event).await?,
+            Breakpoint(bp) => handle_bp(self, &event, bp, true).await?,
+            SingleStep(ss) => handle_ss(self, &event, ss, true).await?,
+            _ => debug!("Received event: {:?}", event),
+        }
+        Ok(())
+    }
+}
+impl<'a> Drop for EventHandler<'a> {
+    fn drop(&mut self) {
+        if self.bp_set {
+            if let Err(e) = task::block_on(shutdown(self)) {
+                error!("Error shutting down: {}", e);
+            }
+        }
+    }
+}
 
 pub(crate) type LogChT = capnp::message::Builder<HeapAllocator>;
 pub async fn listen(
@@ -42,64 +84,33 @@ pub async fn listen(
         let v_addr = dom.get_kernel_base_va() + profile.get_kfunc_offset("NtOpenFile")?;
         let v_space = dom.get_k_vspace();
         let p_space = v_space.get_base();
-        let gpa = v_space.lookup(v_addr).await?.ok_or(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "Cannot translate address of NtOpenFile",
-        ))?;
+        let gpa = v_space.lookup(v_addr).await?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Cannot translate address of NtOpenFile",
+            )
+        })?;
 
         dom.pause_vm().await?;
 
         let orig = p_space.read(gpa, 1).await?[0];
 
         let event_rx = dom.get_event_stream().clone();
-        let mut bp_set = false;
+        let mut handler = EventHandler::new(&mut dom, orig, gpa, log_tx);
         while let Some(event) = event_rx.recv().await {
-            if let Err(e) = handle_event(&mut dom, orig, event, gpa, &mut bp_set, &log_tx).await {
-                clear_bp(&dom, gpa, orig).await;
-                return Err(e.into());
-            }
+            handler.handle_event(event).await?;
         }
-        shutdown(dom, gpa, orig, log_tx).await?;
     }
     Ok(())
 }
 
-async fn clear_bp(dom: &Domain, gpa: PhysicalAddrT, orig: u8) {
-    debug!("Clearing bp");
-    let res = dom.clear_bp_by_physical(gpa, orig).await;
-    if let Err(err) = res {
-        error!("Error clearing bp: {}", err);
-    }
-}
-
-async fn handle_event(
-    dom: &mut Domain,
-    orig: u8,
-    event: Event,
-    gpa: u64,
-    bp_set: &mut bool,
-    log_tx: &Sender<LogChT>,
-) -> Result<(), Error> {
-    use EventExtra::*;
-
-    let extra = event.get_extra();
-    match extra {
-        PauseVCPU => handle_pause(dom, &event, gpa, bp_set).await?,
-        Breakpoint(bp) => handle_bp(dom, orig, &event, bp, gpa, true, log_tx).await?,
-        SingleStep(ss) => handle_ss(dom, gpa, &event, ss, true).await?,
-        _ => debug!("Received event: {:?}", event),
-    }
-    Ok(())
-}
-
-async fn handle_pause(
-    dom: &Domain,
-    event: &Event,
-    gpa: u64,
-    bp_set: &mut bool,
-) -> Result<(), Error> {
+async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(), Error> {
     use Action::*;
     use EventKind::*;
+
+    let dom = &handler.dom;
+    let gpa = handler.gpa;
+    let bp_set = &mut handler.bp_set;
 
     let vcpu = event.get_vcpu();
     dom.toggle_event(vcpu, Breakpoint, true).await?;
@@ -107,8 +118,8 @@ async fn handle_pause(
 
     if !*bp_set {
         debug!("bp address: {:x?}", gpa);
-        dom.set_bp_by_physical(gpa).await?;
         *bp_set = true;
+        dom.set_bp_by_physical(gpa).await?;
     }
 
     dom.reply(event, Continue).await?;
@@ -116,14 +127,15 @@ async fn handle_pause(
 }
 
 async fn handle_bp(
-    dom: &mut Domain,
-    orig: u8,
+    handler: &mut EventHandler<'_>,
     event: &Event,
     extra: &KvmiEventBreakpoint,
-    gpa: u64,
     enable_ss: bool,
-    log_tx: &Sender<LogChT>,
 ) -> Result<(), Error> {
+    let dom = &mut handler.dom;
+    let gpa = handler.gpa;
+    let orig = handler.orig_byte;
+    let log_tx = &handler.log_tx;
     if extra.get_gpa() != gpa {
         dom.reply(event, Action::Continue).await?;
         return Ok(());
@@ -207,14 +219,15 @@ async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Re
 }
 
 async fn handle_ss(
-    dom: &Domain,
-    gpa: PhysicalAddrT,
+    handler: &EventHandler<'_>,
     event: &Event,
     _ss: &KvmiEventSingleStep,
     restore: bool,
 ) -> Result<(), Error> {
     use Action::*;
 
+    let dom = &handler.dom;
+    let gpa = handler.gpa;
     // reset the breakpoint
     if restore {
         dom.set_bp_by_physical(gpa).await?;
@@ -225,13 +238,12 @@ async fn handle_ss(
     Ok(())
 }
 
-async fn shutdown(
-    mut dom: Domain,
-    gpa: PhysicalAddrT,
-    orig: u8,
-    log_tx: Sender<LogChT>,
-) -> Result<(), Error> {
+async fn shutdown(handler: &mut EventHandler<'_>) -> Result<(), Error> {
     use EventExtra::*;
+
+    let dom = &mut handler.dom;
+    let orig = handler.orig_byte;
+    let gpa = handler.gpa;
 
     info!("cleaning up");
     dom.pause_vm().await?;
@@ -245,6 +257,8 @@ async fn shutdown(
         match extra {
             PauseVCPU => {
                 use EventKind::*;
+
+                let dom = &handler.dom;
                 let vcpu = event.get_vcpu();
                 info!("vcpu {} paused", vcpu);
                 dom.toggle_event(vcpu, Breakpoint, false).await?;
@@ -252,14 +266,14 @@ async fn shutdown(
 
                 cnt += 1;
                 if cnt == vcpu_num {
-                    clear_bp(&dom, gpa, orig).await;
+                    clear_bp(dom, gpa, orig).await;
                     dom.reply(&event, Action::Continue).await?;
                     break;
                 }
                 dom.reply(&event, Action::Continue).await?;
             }
-            Breakpoint(bp) => handle_bp(&mut dom, orig, &event, bp, gpa, false, &log_tx).await?,
-            SingleStep(ss) => handle_ss(&dom, gpa, &event, ss, false).await?,
+            Breakpoint(bp) => handle_bp(handler, &event, bp, false).await?,
+            SingleStep(ss) => handle_ss(handler, &event, ss, false).await?,
             _ => debug!("Received event: {:?}", event),
         }
     }
@@ -267,13 +281,19 @@ async fn shutdown(
         if let Some(event) = event_rx.recv().await {
             let extra = event.get_extra();
             match extra {
-                Breakpoint(bp) => {
-                    handle_bp(&mut dom, orig, &event, bp, gpa, false, &log_tx).await?
-                }
-                SingleStep(ss) => handle_ss(&dom, gpa, &event, ss, false).await?,
+                Breakpoint(bp) => handle_bp(handler, &event, bp, false).await?,
+                SingleStep(ss) => handle_ss(handler, &event, ss, false).await?,
                 _ => debug!("Received event: {:?}", event),
             }
         }
     }
     Ok(())
+}
+
+async fn clear_bp(dom: &Domain, gpa: PhysicalAddrT, orig: u8) {
+    debug!("Clearing bp");
+    let res = dom.clear_bp_by_physical(gpa, orig).await;
+    if let Err(err) = res {
+        error!("Error clearing bp: {}", err);
+    }
 }

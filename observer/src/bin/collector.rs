@@ -69,19 +69,32 @@ fn run() -> Result<(), Error> {
         // dropping tx should yield a shutdown
     });
 
+    let (close_tx, close_rx) = sync::channel::<()>(1);
+    let close_handle = task::spawn(async move {
+        // move the close indication channel inside
+        let _tx = close_tx;
+
+        let mut rpc = rpc_sd_rx.fuse();
+        let mut collect = collect_sd_rx.fuse();
+        let mut sig = sig_rx.fuse();
+        select! {
+            _ = rpc.next() => (),
+            _ = collect.next() => (),
+            _ = sig.next() => (),
+        }
+    });
+
     let (rpc_addr, kvmi, _) = opt.get_paths();
     let (log_tx, log_rx) = sync::channel(30);
-    let sig_rx2 = sig_rx.clone();
+    let close_rx2 = close_rx.clone();
     let collect_handle = task::spawn(async move {
         // keep the sender to prevent rpc from shutting down
         let _tx = collect_sd_tx;
 
-        let mut sig = sig_rx2.fuse();
-        let mut rpc = rpc_sd_rx.fuse();
+        let mut close_rx2 = close_rx2.fuse();
         select! {
             res = collect::listen(kvmi, profile, log_tx).fuse() => res,
-            _ = sig.next() => Ok(()),
-            _ = rpc.next() => Ok(()),
+            _ = close_rx2.next() => Ok(()),
         }
     });
 
@@ -89,12 +102,10 @@ fn run() -> Result<(), Error> {
         // keep the sender to prevent collect from shutting down
         let _tx = rpc_sd_tx;
 
-        let mut sig = sig_rx.fuse();
-        let mut collect = collect_sd_rx.fuse();
+        let mut close = close_rx.fuse();
         select! {
             res = rpc::listen(&rpc_addr, log_rx).fuse() => res,
-            _ = sig.next() => Ok(()),
-            _ = collect.next() => Ok(()),
+            _ = close.next() => Ok(()),
         }
     });
 
@@ -102,6 +113,7 @@ fn run() -> Result<(), Error> {
         signals.close();
         sig_handle.await;
 
+        close_handle.await;
         collect_handle.await
     }))
 }

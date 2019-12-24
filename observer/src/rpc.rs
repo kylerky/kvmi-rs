@@ -1,5 +1,5 @@
-mod observer;
 mod collector;
+mod observer;
 
-pub use observer::*;
+pub use self::observer::*;
 pub use collector::*;

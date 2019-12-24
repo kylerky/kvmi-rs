@@ -136,6 +136,7 @@ async fn streaming(
     let mut push_fut = FuturesUnordered::new();
 
     let mut consumer = None;
+    #[allow(clippy::unnecessary_mut_passed)]
     loop {
         select! {
             rpc_res = rpc_system => {

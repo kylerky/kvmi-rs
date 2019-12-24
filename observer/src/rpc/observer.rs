@@ -61,6 +61,7 @@ pub async fn subscribe(addr: &SocketAddr) -> Result<(), io::Error> {
     let mut subscribe = Box::pin(client.subscribe(consumer)).fuse();
 
     let mut _subscription = None;
+    #[allow(clippy::unnecessary_mut_passed)]
     loop {
         select! {
             rpc_res = rpc_system => {

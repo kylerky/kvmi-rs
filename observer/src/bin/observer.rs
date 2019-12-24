@@ -4,7 +4,6 @@ use std::process;
 
 use structopt::StructOpt;
 
-
 use async_std::task;
 
 use observer::rpc;
