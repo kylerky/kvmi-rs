@@ -3,11 +3,10 @@ use std::fs::{self, Permissions};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_std::os::unix::net::UnixListener;
 use async_std::prelude::*;
-use async_std::sync::{Arc, Sender};
+use async_std::sync::Sender;
 
 use log::{debug, error, info};
 
@@ -27,7 +26,6 @@ pub(crate) type LogChT = capnp::message::Builder<HeapAllocator>;
 pub async fn listen(
     addr: PathBuf,
     profile: RekallProfile,
-    exit: Arc<AtomicBool>,
     log_tx: Sender<LogChT>,
 ) -> Result<(), io::Error> {
     let listener = UnixListener::bind(&addr).await?;
@@ -59,9 +57,6 @@ pub async fn listen(
             if let Err(e) = handle_event(&mut dom, orig, event, gpa, &mut bp_set, &log_tx).await {
                 clear_bp(&dom, gpa, orig).await;
                 return Err(e.into());
-            }
-            if exit.load(Ordering::Relaxed) {
-                break;
             }
         }
         shutdown(dom, gpa, orig, log_tx).await?;
@@ -147,7 +142,7 @@ async fn handle_bp(
     }
 
     let pid = get_pid(dom, event, sregs).await?;
-    println!("pid: {}", pid);
+    debug!("pid: {}", pid);
 
     let mut message = capnp::message::Builder::new_default();
     {
@@ -206,7 +201,7 @@ async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Re
         return Ok(());
     }
     let fname = memory::read_utf16(&v_space, fname_ptr).await?;
-    println!("fname: {}", fname);
+    debug!("fname: {}", fname);
 
     Ok(())
 }

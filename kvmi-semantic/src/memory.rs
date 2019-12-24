@@ -108,7 +108,9 @@ pub(super) async fn by_physical_mem_scan(
     flink_rva: u64,
     blink_rva: u64,
 ) -> Result<Option<u64>> {
-    let re = Regex::new(r"(?-u)System\x00").unwrap();
+    lazy_static! {
+        static ref RE: Regex = Regex::new(r"(?-u)System\x00").unwrap();
+    }
     let major_rva = crate::get_struct_field_offset(profile, KUSER_SHARED_DATA, "NtMajorVersion")?;
     let minor_rva = crate::get_struct_field_offset(profile, KUSER_SHARED_DATA, "NtMinorVersion")?;
 
@@ -120,7 +122,7 @@ pub(super) async fn by_physical_mem_scan(
             let p_space = v_space.get_base();
             p_space.read(addr, page_sz).await?
         };
-        let matches = re
+        let matches: Vec<(isize, u64, u64)> = RE
             .find_iter(&page[..])
             .map(|mat| {
                 let proc_offset = mat.start() as isize - name_rva;
@@ -157,7 +159,8 @@ pub(super) async fn by_physical_mem_scan(
                 let flink = u64::from_ne_bytes(flink.unwrap().try_into().unwrap());
                 (proc_offset, dtb & CR3_MASK, flink)
             })
-            .filter(|(_, dtb, flink)| *flink > 0 && *dtb > 0 && *dtb < addr_range.end);
+            .filter(|(_, dtb, flink)| *flink > 0 && *dtb > 0 && *dtb < addr_range.end)
+            .collect();
 
         for (_offset, dtb, flink) in matches {
             debug!("verifying dtb: 0x{:x?}", dtb);
