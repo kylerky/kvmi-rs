@@ -1,4 +1,5 @@
 use std::io;
+use std::mem;
 use std::net::SocketAddr;
 
 use futures::select;
@@ -16,7 +17,7 @@ use async_std::net::TcpListener;
 use async_std::sync::{self, Receiver, Sender};
 use async_std::task;
 
-use log::error;
+use log::info;
 
 use crate::collect::LogChT;
 
@@ -102,7 +103,15 @@ pub async fn listen(addr: &SocketAddr, event_log_rx: Receiver<LogChT>) -> Result
     let (rpc_server, consumer_rx, close_rx) = RpcServer::new();
     let observer = publisher::ToClient::new(rpc_server).into_client::<capnp_rpc::Server>();
 
+    // start draining the event channel
+    let (mut drain_tx, drain_rx) = sync::channel(1);
+    let mut drain_handle = task::spawn(drain(event_log_rx.clone(), drain_rx));
+
     while let Some(stream) = listener.incoming().next().await {
+        // stop draining the event channel
+        mem::drop(drain_tx);
+        drain_handle.await;
+
         let stream = stream?;
         stream.set_nodelay(true)?;
         let (reader, writer) = stream.split();
@@ -116,11 +125,27 @@ pub async fn listen(addr: &SocketAddr, event_log_rx: Receiver<LogChT>) -> Result
             close_rx.clone(),
             event_log_rx.clone(),
         )) {
-            error!("rpc system error: {}", e);
+            info!("Connection closed: {}", e);
         }
+
+        // start draining the event channel
+        let (tx, drain_rx) = sync::channel(1);
+        drain_tx = tx;
+        drain_handle = task::spawn(drain(event_log_rx.clone(), drain_rx));
     }
 
     Ok(())
+}
+
+async fn drain(event_log_rx: Receiver<LogChT>, sd_rx: Receiver<()>) {
+    let mut log_rx = event_log_rx.fuse();
+    let mut sd_rx = sd_rx.fuse();
+    loop {
+        select! {
+            _ = log_rx.next() => (),
+            _ = sd_rx.next() => return (),
+        }
+    }
 }
 
 async fn streaming(

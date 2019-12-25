@@ -52,6 +52,8 @@ fn main() {
 fn run() -> Result<(), Error> {
     let opt = Opt::from_args();
 
+    env_logger::init();
+
     let profile = fs::read_to_string(opt.profile.as_path())?;
     let profile: RekallProfile = serde_json::from_str(&profile[..])?;
 
