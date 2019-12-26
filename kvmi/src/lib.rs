@@ -406,7 +406,7 @@ struct ReqHandle {
 
 impl Drop for Domain {
     fn drop(&mut self) {
-        self.close();
+        task::block_on(self.close());
     }
 }
 
@@ -498,10 +498,10 @@ impl Domain {
         Ok(msg.construct_reply(result))
     }
 
-    pub fn close(&mut self) {
+    pub async fn close(&mut self) {
         mem::drop(self.shutdown.take());
         if let Some(handle) = self.deserializer.take() {
-            task::block_on(handle);
+            handle.await;
         }
     }
 
