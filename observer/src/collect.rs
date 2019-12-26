@@ -246,37 +246,15 @@ async fn shutdown(handler: &mut EventHandler<'_>) -> Result<(), Error> {
     let gpa = handler.gpa;
 
     info!("cleaning up");
-    dom.pause_vm().await?;
-    let event_rx = dom.get_event_stream().clone();
+    clear_bp(dom, gpa, orig).await;
 
     let vcpu_num = dom.get_vcpu_num().await? as usize;
-    debug!("{} vcpus to pause", vcpu_num);
-    let mut cnt = 0;
-    while let Some(event) = event_rx.recv().await {
-        let extra = event.get_extra();
-        match extra {
-            PauseVCPU => {
-                use EventKind::*;
-
-                let dom = &handler.dom;
-                let vcpu = event.get_vcpu();
-                info!("vcpu {} paused", vcpu);
-                dom.toggle_event(vcpu, Breakpoint, false).await?;
-                dom.toggle_event(vcpu, SingleStep, false).await?;
-
-                cnt += 1;
-                if cnt == vcpu_num {
-                    clear_bp(dom, gpa, orig).await;
-                    dom.reply(&event, Action::Continue).await?;
-                    break;
-                }
-                dom.reply(&event, Action::Continue).await?;
-            }
-            Breakpoint(bp) => handle_bp(handler, &event, bp, false).await?,
-            SingleStep(ss) => handle_ss(handler, &event, ss, false).await?,
-            _ => debug!("Received event: {:?}", event),
-        }
+    for vcpu in 0..vcpu_num as u16 {
+        dom.toggle_event(vcpu, EventKind::Breakpoint, false).await?;
+        dom.toggle_event(vcpu, EventKind::SingleStep, false).await?;
     }
+
+    let event_rx = dom.get_event_stream().clone();
     while !event_rx.is_empty() {
         if let Some(event) = event_rx.recv().await {
             let extra = event.get_extra();

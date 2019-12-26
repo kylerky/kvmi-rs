@@ -9,7 +9,7 @@ use futures::{AsyncReadExt, FutureExt, StreamExt};
 use capnp::capability::{Promise, Response};
 use capnp_rpc::rpc_twoparty_capnp::Side;
 use capnp_rpc::twoparty::{VatId, VatNetwork};
-use capnp_rpc::RpcSystem;
+use capnp_rpc::{Disconnector, RpcSystem};
 
 use crate::kvmi_capnp::{consumer, event, publisher, subscription};
 
@@ -17,7 +17,7 @@ use async_std::net::TcpListener;
 use async_std::sync::{self, Receiver, Sender};
 use async_std::task;
 
-use log::info;
+use log::{error, info};
 
 use crate::collect::LogChT;
 
@@ -119,12 +119,14 @@ pub async fn listen(addr: &SocketAddr, event_log_rx: Receiver<LogChT>) -> Result
         let network = VatNetwork::new(reader, writer, Side::Server, Default::default());
         let rpc_system = RpcSystem::new(Box::new(network), Some(observer.clone().client));
 
-        if let Err(e) = task::block_on(streaming(
+        if let Err(e) = streaming(
             rpc_system,
             consumer_rx.clone(),
             close_rx.clone(),
             event_log_rx.clone(),
-        )) {
+        )
+        .await
+        {
             info!("Connection closed: {}", e);
         }
 
@@ -148,12 +150,24 @@ async fn drain(event_log_rx: Receiver<LogChT>, sd_rx: Receiver<()>) {
     }
 }
 
+struct RpcCleanUp(Option<Disconnector<VatId>>);
+impl Drop for RpcCleanUp {
+    fn drop(&mut self) {
+        if let Err(e) = task::block_on(self.0.take().unwrap()) {
+            error!("Error cleaning up the RPC system: {}", e);
+        }
+    }
+}
+
 async fn streaming(
     rpc_system: RpcSystem<VatId>,
     consumer_rx: Receiver<ServerChanT>,
     close_rx: Receiver<()>,
     event_rx: Receiver<LogChT>,
 ) -> Result<(), io::Error> {
+    // clean up the RPC system on exit
+    let _clean_up = RpcCleanUp(Some(rpc_system.get_disconnector()));
+
     let mut consumer_rx = consumer_rx.fuse();
     let mut close_rx = close_rx.fuse();
     let mut rpc_system = rpc_system.fuse();
