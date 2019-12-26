@@ -9,7 +9,13 @@ build = "build.rs"
 kvmi-semantic = { path = "../kvmi-semantic" }
 structopt = "0.3"
 exitcode = "1.1"
+
+# See https://github.com/async-rs/async-std/issues/644
+#
+# TODO: switch to a released version of async-std
+# when the new executor is ready
 async-std = { git = "https://github.com/stjepang/async-std", branch = "new-scheduler", features = ["unstable"] }
+
 futures = "0.3"
 log = "0.4"
 capnp = "0.11"
