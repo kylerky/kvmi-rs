@@ -163,7 +163,7 @@ impl IA32eVirtual {
             }
             Ok(None)
         }
-            .boxed()
+        .boxed()
     }
 
     pub async fn write(&self, v_addr: IA32eAddrT, data: Vec<u8>) -> Result<Option<()>> {
