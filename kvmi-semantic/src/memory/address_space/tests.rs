@@ -18,6 +18,7 @@ mock! {
         fn get_dom(&self) -> &kvmi::Domain;
         async fn read(&self, addr: AddressType, sz: usize) -> Result<Vec<u8>, Error>;
         async fn write(&self, addr: AddressType, data: Vec<u8>) -> Result<(), Error>;
+        async fn invalidate(&self, addr: AddressType) -> Result<(), Error>;
         fn from(dom: kvmi::Domain) -> Self;
     }
     trait AddressSpace {

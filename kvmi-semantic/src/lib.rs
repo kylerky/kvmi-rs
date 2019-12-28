@@ -20,8 +20,8 @@ use async_std::os::unix::io::AsRawFd;
 use async_std::sync::{Arc, Receiver};
 
 use kvmi::message::{
-    CommonEventReply, ControlEvent, GetRegisters, GetRegistersReply, GetVCPUNum, PauseVCPUs,
-    SetSingleStep,
+    CommonEventReply, ControlEvent, GetRegisters, GetRegistersReply, GetVCPUNum, PFEventReply,
+    PauseVCPUs, SetSingleStep,
 };
 use kvmi::DomainBuilder;
 
@@ -219,6 +219,15 @@ impl Domain {
         enable_ss: bool,
     ) -> Result<()> {
         tracing::resume_from_bp(&self.k_vspace, orig, event, extra, enable_ss).await
+    }
+
+    pub async fn handle_pf(&self, event: &Event, extra: &KvmiEventPF) -> Result<()> {
+        let p_space = self.k_vspace.get_base();
+        p_space.invalidate(extra.as_raw_ref().gpa).await?;
+        let dom = p_space.get_dom();
+        dom.send(PFEventReply::new(&event, Action::Retry).unwrap())
+            .await?;
+        Ok(())
     }
 
     pub async fn clear_bp_by_physical(&self, p_addr: PhysicalAddrT, orig: u8) -> Result<()> {

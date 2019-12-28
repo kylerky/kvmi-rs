@@ -5,16 +5,19 @@ use cfg_if::cfg_if;
 
 use crate::{Error, Result};
 
-use async_std::sync::{Arc, RwLock};
+use async_std::sync::{Arc, Mutex, RwLock};
 
 use std::collections::HashMap;
 use std::convert::TryInto;
 
 use log::debug;
 
-use kvmi::message::{ReadPhysical, WritePhysical};
+use kvmi::message::{ReadPhysical, SetPageAccess, WritePhysical};
+use kvmi::PageAccessEntryBuilder;
 
 use futures::future::{BoxFuture, FutureExt};
+
+use lru::LruCache;
 
 // [12..52] bit of the entry
 const ENTRY_POINTER_MASK: u64 = (!0u64) << 24 >> 12;
@@ -46,11 +49,13 @@ cfg_if! {
     }
 }
 
+const CACHE_CAP: usize = 1 << 18;
 #[allow(dead_code)]
 mod kvmi_physical {
     use super::*;
     pub struct KVMIPhysical {
         dom: kvmi::Domain,
+        cache: Mutex<LruCache<PhysicalAddrT, Vec<u8>>>,
     }
 
     impl AddressSpace for KVMIPhysical {
@@ -59,7 +64,10 @@ mod kvmi_physical {
 
     impl KVMIPhysical {
         pub fn new(dom: kvmi::Domain) -> Self {
-            Self { dom }
+            Self {
+                dom,
+                cache: Mutex::new(LruCache::new(CACHE_CAP)),
+            }
         }
 
         pub fn get_dom(&self) -> &kvmi::Domain {
@@ -68,13 +76,51 @@ mod kvmi_physical {
 
         pub async fn read(&self, addr: PhysicalAddrT, sz: usize) -> Result<Vec<u8>> {
             Self::validate(addr, sz)?;
-            let data = self.dom.send(ReadPhysical::new(addr, sz as u64)).await?;
-            Ok(data)
+
+            let page = addr & !ADDR_MASK;
+            let offset = (addr & ADDR_MASK) as usize;
+
+            let mut cache = self.cache.lock().await;
+            match cache.get(&addr) {
+                Some(vec) => Ok(vec[offset..offset + sz].to_vec()),
+                None => {
+                    let mut msg = SetPageAccess::new();
+                    let mut builder = PageAccessEntryBuilder::new(addr);
+                    builder.set_read().set_execute();
+                    msg.push(builder.build());
+                    self.dom.send(msg).await?;
+
+                    let data = self
+                        .dom
+                        .send(ReadPhysical::new(page, PHYSICAL_PAGE_SZ))
+                        .await?;
+
+                    let ret = data[offset..offset + sz].to_vec();
+                    cache.put(addr, data);
+                    Ok(ret)
+                }
+            }
         }
 
         pub async fn write(&self, addr: PhysicalAddrT, data: Vec<u8>) -> Result<()> {
             Self::validate(addr, data.len())?;
+
+            self.invalidate(addr).await?;
+
             self.dom.send(WritePhysical::new(addr, data)).await?;
+            Ok(())
+        }
+
+        pub async fn invalidate(&self, addr: PhysicalAddrT) -> Result<()> {
+            let mut msg = SetPageAccess::new();
+            let mut builder = PageAccessEntryBuilder::new(addr);
+            builder.set_read().set_write().set_execute();
+            msg.push(builder.build());
+            self.dom.send(msg).await?;
+
+            let page = addr & !ADDR_MASK;
+            let mut cache = self.cache.lock().await;
+            cache.pop(&page);
             Ok(())
         }
 

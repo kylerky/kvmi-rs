@@ -13,6 +13,7 @@ serde_json = "1.0"
 lazy_static = "1.4"
 futures = "0.3"
 cfg-if = "0.1"
+lru = "0.4"
 
 [dependencies.regex]
 version = "1.3"
