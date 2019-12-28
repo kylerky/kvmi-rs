@@ -10,8 +10,6 @@ use async_std::sync::{Arc, Mutex, RwLock};
 use std::collections::HashMap;
 use std::convert::TryInto;
 
-use log::debug;
-
 use kvmi::message::{ReadPhysical, SetPageAccess, WritePhysical};
 use kvmi::PageAccessEntryBuilder;
 
@@ -193,7 +191,6 @@ impl IA32eVirtual {
         sz: usize,
     ) -> BoxFuture<Result<Option<Vec<u8>>>> {
         async move {
-            debug!("reading across page boundary");
             let offset = v_addr & VADDR_OFFSET_MASK;
             let first_sz = (V_PAGE_SZ - offset) as usize;
             let second_sz = sz - first_sz;
@@ -254,7 +251,6 @@ impl IA32eVirtual {
     }
 
     async fn translate_v2p(&self, v_addr: IA32eAddrT) -> Result<Option<(PhysicalAddrT, u32)>> {
-        debug!("translating 0x{:x?}", v_addr);
         let mut base = self.ptb;
         let mut level: u32 = 4;
         let result = loop {

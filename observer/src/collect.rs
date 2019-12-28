@@ -49,6 +49,7 @@ impl<'a> EventHandler<'a> {
             PauseVCPU => handle_pause(self, &event).await?,
             Breakpoint(bp) => handle_bp(self, &event, bp, true).await?,
             SingleStep(ss) => handle_ss(self, &event, ss, true).await?,
+            PF(pf) => handle_pf(self, &event, pf).await?,
             _ => debug!("Received event: {:?}", event),
         }
         Ok(())
@@ -115,6 +116,7 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
     let vcpu = event.get_vcpu();
     dom.toggle_event(vcpu, Breakpoint, true).await?;
     dom.toggle_event(vcpu, SingleStep, true).await?;
+    dom.toggle_event(vcpu, PF, true).await?;
 
     if !*bp_set {
         debug!("bp address: {:x?}", gpa);
@@ -154,7 +156,6 @@ async fn handle_bp(
     }
 
     let pid = get_pid(dom, event, sregs).await?;
-    debug!("pid: {}", pid);
 
     let mut message = capnp::message::Builder::new_default();
     {
@@ -212,8 +213,7 @@ async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Re
     if fname_ptr == 0 || !IA32eVirtual::is_canonical(fname_ptr) {
         return Ok(());
     }
-    let fname = memory::read_utf16(&v_space, fname_ptr).await?;
-    debug!("fname: {}", fname);
+    let _fname = memory::read_utf16(&v_space, fname_ptr).await?;
 
     Ok(())
 }
@@ -238,6 +238,15 @@ async fn handle_ss(
     Ok(())
 }
 
+async fn handle_pf(
+    handler: &EventHandler<'_>,
+    event: &Event,
+    extra: &KvmiEventPF,
+) -> Result<(), Error> {
+    let dom = &handler.dom;
+    dom.handle_pf(event, extra).await
+}
+
 async fn shutdown(handler: &mut EventHandler<'_>) -> Result<(), Error> {
     use EventExtra::*;
 
@@ -252,6 +261,7 @@ async fn shutdown(handler: &mut EventHandler<'_>) -> Result<(), Error> {
     for vcpu in 0..vcpu_num as u16 {
         dom.toggle_event(vcpu, EventKind::Breakpoint, false).await?;
         dom.toggle_event(vcpu, EventKind::SingleStep, false).await?;
+        dom.toggle_event(vcpu, EventKind::PF, false).await?;
     }
 
     let event_rx = dom.get_event_stream().clone();
@@ -261,6 +271,7 @@ async fn shutdown(handler: &mut EventHandler<'_>) -> Result<(), Error> {
             match extra {
                 Breakpoint(bp) => handle_bp(handler, &event, bp, false).await?,
                 SingleStep(ss) => handle_ss(handler, &event, ss, false).await?,
+                PF(pf) => handle_pf(handler, &event, pf).await?,
                 _ => debug!("Received event: {:?}", event),
             }
         }
