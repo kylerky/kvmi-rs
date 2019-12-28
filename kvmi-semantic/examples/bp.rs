@@ -191,6 +191,7 @@ async fn handle_event(
         PauseVCPU => handle_pause(dom, &event, gpa, bp_set).await?,
         Breakpoint(bp) => handle_bp(dom, orig, &event, bp, gpa, true).await?,
         SingleStep(ss) => handle_ss(dom, gpa, &event, ss, true).await?,
+        PF(pf) => handle_pf(dom, &event, pf).await?,
         _ => debug!("Received event: {:?}", event),
     }
     Ok(())
@@ -206,6 +207,7 @@ async fn handle_pause(
     use EventKind::*;
 
     let vcpu = event.get_vcpu();
+    dom.toggle_event(vcpu, PF, true).await?;
     dom.toggle_event(vcpu, Breakpoint, true).await?;
     dom.toggle_event(vcpu, SingleStep, true).await?;
 
@@ -259,6 +261,10 @@ async fn handle_bp(
             Err(e)
         }
     }
+}
+
+async fn handle_pf(dom: &mut Domain, event: &Event, extra: &KvmiEventPF) -> Result<(), Error> {
+    dom.handle_pf(event, extra).await
 }
 
 async fn get_pid(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<u64, Error> {
