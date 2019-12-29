@@ -10,12 +10,14 @@ use async_std::sync::{Arc, Mutex, RwLock};
 use std::collections::HashMap;
 use std::convert::TryInto;
 
-use kvmi::message::{ReadPhysical, SetPageAccess, WritePhysical};
-use kvmi::PageAccessEntryBuilder;
+use kvmi::message::{ReadPhysical, SetPageAccess, SetPageWriteBitmap, WritePhysical};
+use kvmi::{BitmapEntryBuilder, PageAccessEntryBuilder, PageWriteBitmap};
 
 use futures::future::{BoxFuture, FutureExt};
 
 use lru::LruCache;
+
+use log::debug;
 
 // [12..52] bit of the entry
 const ENTRY_POINTER_MASK: u64 = (!0u64) << 24 >> 12;
@@ -25,9 +27,16 @@ const VA_MASK: u64 = 0xff8;
 const CANON_MASK: u64 = 0xffff_8000_0000_0000;
 
 pub type PhysicalAddrT = u64;
-const ADDR_MASK: PhysicalAddrT = 0xfff;
-const VADDR_OFFSET_MASK: IA32eAddrT = 0xfff;
 const PHYSICAL_PAGE_SZ: PhysicalAddrT = 1 << 12;
+const ADDR_MASK: PhysicalAddrT = PHYSICAL_PAGE_SZ - 1;
+const ADDR_PAGE: PhysicalAddrT = !ADDR_MASK;
+
+const SUBPAGE_SHIFT: u32 = 7;
+const SUBPAGE_SZ: PhysicalAddrT = 1 << SUBPAGE_SHIFT;
+const SUBPAGE_OFFSET: PhysicalAddrT = SUBPAGE_SZ - 1;
+const SUBPAGE_KEY: PhysicalAddrT = !SUBPAGE_OFFSET;
+
+const VADDR_OFFSET_MASK: IA32eAddrT = 0xfff;
 const V_PAGE_SZ: IA32eAddrT = 1 << 12;
 
 pub type IA32eAddrT = u64;
@@ -47,13 +56,18 @@ cfg_if! {
     }
 }
 
-const CACHE_CAP: usize = 1 << 18;
+const CACHE_CAP: usize = 1 << 23;
 #[allow(dead_code)]
 mod kvmi_physical {
     use super::*;
     pub struct KVMIPhysical {
         dom: kvmi::Domain,
-        cache: Mutex<LruCache<PhysicalAddrT, Vec<u8>>>,
+        cache: Mutex<Cache>,
+    }
+
+    struct Cache {
+        subpages: LruCache<PhysicalAddrT, Vec<u8>>,
+        bitmaps: HashMap<PhysicalAddrT, PageWriteBitmap>,
     }
 
     impl AddressSpace for KVMIPhysical {
@@ -64,7 +78,10 @@ mod kvmi_physical {
         pub fn new(dom: kvmi::Domain) -> Self {
             Self {
                 dom,
-                cache: Mutex::new(LruCache::new(CACHE_CAP)),
+                cache: Mutex::new(Cache {
+                    subpages: LruCache::new(CACHE_CAP),
+                    bitmaps: HashMap::new(),
+                }),
             }
         }
 
@@ -73,28 +90,83 @@ mod kvmi_physical {
         }
 
         pub async fn read(&self, addr: PhysicalAddrT, sz: usize) -> Result<Vec<u8>> {
-            Self::validate(addr, sz)?;
+            if sz == 0 {
+                return Ok(vec![]);
+            }
 
-            let page = addr & !ADDR_MASK;
-            let offset = (addr & ADDR_MASK) as usize;
+            let key = addr & SUBPAGE_KEY;
+            let offset = (addr & SUBPAGE_OFFSET) as usize;
 
-            let mut cache = self.cache.lock().await;
-            match cache.get(&addr) {
-                Some(vec) => Ok(vec[offset..offset + sz].to_vec()),
-                None => {
-                    let mut msg = SetPageAccess::new();
-                    let mut builder = PageAccessEntryBuilder::new(addr);
-                    builder.set_read().set_execute();
-                    msg.push(builder.build());
-                    self.dom.send(msg).await?;
-
-                    let data = self
-                        .dom
-                        .send(ReadPhysical::new(page, PHYSICAL_PAGE_SZ))
+            let subpages_num = (offset + sz - 1) / SUBPAGE_SZ as usize;
+            debug!(
+                "key: 0x{:x?}, offset: 0x{:x?}, num: 0x{:x?}",
+                key, offset, subpages_num
+            );
+            match subpages_num {
+                0 => self.read_within_subpage(key, offset, sz).await,
+                _ => {
+                    let mut res = self
+                        .read_within_subpage(key, offset, PHYSICAL_PAGE_SZ as usize - offset)
                         .await?;
 
+                    for i in 1..subpages_num as u64 {
+                        debug!("key: 0x{:x?}", key + i * SUBPAGE_SZ);
+                        let mut v = self
+                            .read_within_subpage(key + i * SUBPAGE_SZ, 0, SUBPAGE_SZ as usize)
+                            .await?;
+                        res.append(&mut v);
+                    }
+
+                    let remaining = offset + sz - subpages_num * SUBPAGE_SZ as usize;
+                    debug!("remaining: 0x{:x?}", remaining);
+                    let mut v = self
+                        .read_within_subpage(key + subpages_num as u64 * SUBPAGE_SZ, 0, remaining)
+                        .await?;
+                    res.append(&mut v);
+                    Ok(res)
+                }
+            }
+        }
+
+        async fn read_within_subpage(
+            &self,
+            key: PhysicalAddrT,
+            offset: usize,
+            sz: usize,
+        ) -> Result<Vec<u8>> {
+            let mut cache = self.cache.lock().await;
+            match cache.subpages.get(&key) {
+                Some(vec) => {
+                    debug!("cache hit");
+                    Ok(vec[offset..offset + sz].to_vec())
+                }
+                None => {
+                    debug!("cache missed");
+                    let page = key & ADDR_PAGE;
+                    let mut bitmap = cache
+                        .bitmaps
+                        .get(&page)
+                        .map(|m| *m)
+                        .unwrap_or_else(|| PageWriteBitmap::default());
+
+                    let pos = (key & ADDR_MASK) >> SUBPAGE_SHIFT;
+                    bitmap.clear(pos);
+
+                    // TODO: switch to SPP
+                    let mut msg = SetPageWriteBitmap::new();
+                    let mut builder = BitmapEntryBuilder::new(page);
+                    builder.bitmap(bitmap);
+                    // let mut msg = SetPageAccess::new();
+                    // let mut builder = PageAccessEntryBuilder::new(page);
+                    // builder.set_read().set_execute();
+                    msg.push(builder.build());
+
+                    self.dom.send(msg).await?;
+                    cache.bitmaps.insert(page, bitmap);
+
+                    let data = self.dom.send(ReadPhysical::new(key, SUBPAGE_SZ)).await?;
                     let ret = data[offset..offset + sz].to_vec();
-                    cache.put(addr, data);
+                    cache.subpages.put(key, data);
                     Ok(ret)
                 }
             }
@@ -110,15 +182,39 @@ mod kvmi_physical {
         }
 
         pub async fn invalidate(&self, addr: PhysicalAddrT) -> Result<()> {
-            let mut msg = SetPageAccess::new();
-            let mut builder = PageAccessEntryBuilder::new(addr);
-            builder.set_read().set_write().set_execute();
-            msg.push(builder.build());
-            self.dom.send(msg).await?;
+            debug!("invalidate: 0x{:x?}", addr);
+            let key = addr & SUBPAGE_KEY;
+            let page = addr & ADDR_PAGE;
 
-            let page = addr & !ADDR_MASK;
             let mut cache = self.cache.lock().await;
-            cache.pop(&page);
+            let bitmap = cache.bitmaps.get(&page).map(|m| *m);
+            match bitmap {
+                None => return Ok(()),
+                Some(mut bitmap) => {
+                    let pos = (key & ADDR_MASK) >> SUBPAGE_SHIFT;
+                    bitmap.set(pos);
+                    debug!("bitmap: 0x{:x?}", bitmap);
+
+                    // TODO: switch to SPP
+                    let mut msg = SetPageWriteBitmap::new();
+                    let mut builder = BitmapEntryBuilder::new(page);
+                    builder.bitmap(bitmap);
+                    msg.push(builder.build());
+                    self.dom.send(msg).await?;
+                    if bitmap == PageWriteBitmap::default() {
+                        // let mut msg = SetPageAccess::new();
+                        // let mut builder = PageAccessEntryBuilder::new(page);
+                        // builder.set_read().set_write().set_execute();
+                        // msg.push(builder.build());
+                        // self.dom.send(msg).await?;
+
+                        cache.bitmaps.remove(&page);
+                    } else {
+                        cache.bitmaps.insert(page, bitmap);
+                    }
+                    cache.subpages.pop(&key);
+                }
+            }
             Ok(())
         }
 
@@ -130,6 +226,10 @@ mod kvmi_physical {
             } else {
                 Ok(())
             }
+        }
+
+        fn is_cross_cache_line(offset: PhysicalAddrT, sz: usize) -> bool {
+            (offset + sz as PhysicalAddrT) > SUBPAGE_SZ
         }
     }
 

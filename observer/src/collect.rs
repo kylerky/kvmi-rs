@@ -116,7 +116,6 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
     let vcpu = event.get_vcpu();
     dom.toggle_event(vcpu, Breakpoint, true).await?;
     dom.toggle_event(vcpu, SingleStep, true).await?;
-    dom.toggle_event(vcpu, PF, true).await?;
 
     if !*bp_set {
         debug!("bp address: {:x?}", gpa);
@@ -243,6 +242,7 @@ async fn handle_pf(
     event: &Event,
     extra: &KvmiEventPF,
 ) -> Result<(), Error> {
+    debug!("handle pf");
     let dom = &handler.dom;
     dom.handle_pf(event, extra).await
 }

@@ -33,8 +33,9 @@ mod c_ffi;
 use c_ffi::*;
 pub use c_ffi::{
     kvm_msr_entry, kvm_regs, kvm_sregs, kvmi_event_arch, kvmi_event_pf, kvmi_get_registers_reply,
-    HSToWire, KvmiEventBreakpoint, KvmiEventCR, KvmiEventPF, KvmiEventSingleStep, PageAccessEntry,
-    PageAccessEntryBuilder,
+    BitmapEntryBuilder, HSToWire, KvmiEventBreakpoint, KvmiEventCR, KvmiEventPF,
+    KvmiEventSingleStep, PageAccessEntry, PageAccessEntryBuilder, PageWriteBitmap,
+    PageWriteBitmapEntry,
 };
 
 mod utils;
@@ -362,7 +363,7 @@ where
         reader.read_exact(&mut buffer[..]).await?;
         let err: ErrorCode = unsafe { transmute(buffer) };
         if err.err != 0 {
-            error!("non zero error code from KVM: {}", err.err);
+            error!("error from KVM: {}", err.err);
             return Err(io::Error::from_raw_os_error(err.as_os_error()).into());
         }
         Ok(size - (size_of::<ErrorCode>() as u16))

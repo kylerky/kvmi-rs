@@ -368,6 +368,48 @@ impl ControlCR {
     }
 }
 
+#[derive(Debug)]
+pub struct ControlSPP {
+    enable: bool,
+}
+impl Message for ControlSPP {}
+impl Messenger for ControlSPP {
+    type Reply = ();
+}
+impl Msg for ControlSPP {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
+        let seq = new_seq();
+        let kind = KVMI_CONTROL_SPP as u16;
+        let hdr = get_header(kind, size_of::<kvmi_control_spp>() as u16, seq);
+
+        let mut msg = VecBuf::<kvmi_control_spp>::new();
+        unsafe {
+            let typed = msg.as_mut_type();
+            typed.enable = self.enable as u8;
+        }
+
+        let req_n_rx = get_request(kind, 0, seq);
+        (Some(req_n_rx), vec![hdr.into(), msg.into()])
+    }
+    fn get_error(&self, e: Option<Error>) -> Error {
+        let errstr = e.map(|e| e.to_string()).unwrap_or_else(|| String::new());
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!(
+                "Error sending ControlSPP command: {}, msg: {:?}",
+                errstr, self
+            ),
+        )
+        .into()
+    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
+}
+impl ControlSPP {
+    pub fn new(enable: bool) -> Self {
+        Self { enable }
+    }
+}
+
 pub struct PauseVCPUs {
     num: u32,
 }
@@ -486,6 +528,65 @@ impl SetPageAccess {
     }
 }
 impl Default for SetPageAccess {
+    fn default() -> Self {
+        Self {
+            entries: Some(vec![]),
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct SetPageWriteBitmap {
+    entries: Option<Vec<PageWriteBitmapEntry>>,
+}
+impl Message for SetPageWriteBitmap {}
+impl Messenger for SetPageWriteBitmap {
+    type Reply = ();
+}
+impl Msg for SetPageWriteBitmap {
+    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
+        let kind = KVMI_SET_PAGE_WRITE_BITMAP as u16;
+        let entries = self.entries.take().unwrap();
+        let entries_len = entries.len();
+
+        let msg_sz = size_of::<kvmi_set_page_write_bitmap>()
+            + entries_len * size_of::<PageWriteBitmapEntry>();
+        let seq = new_seq();
+        let hdr = get_header(kind, msg_sz as u16, seq);
+
+        let mut msg = VecBuf::<kvmi_set_page_write_bitmap>::new();
+        unsafe {
+            let typed = msg.as_mut_type();
+            typed.count = entries_len as u16;
+        }
+
+        let entries = any_vec_as_u8_vec(entries);
+
+        let req_n_rx = get_request(kind, 0, seq);
+        (Some(req_n_rx), vec![hdr.into(), msg.into(), entries])
+    }
+    fn get_error(&self, e: Option<Error>) -> Error {
+        let errstr = e.map(|e| e.to_string()).unwrap_or_else(|| String::new());
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            format!("Error setting page write bitmap: {:?}", errstr),
+        )
+        .into()
+    }
+    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
+}
+impl SetPageWriteBitmap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, entry: PageWriteBitmapEntry) {
+        if let Some(entries) = self.entries.as_mut() {
+            entries.push(entry);
+        }
+    }
+}
+impl Default for SetPageWriteBitmap {
     fn default() -> Self {
         Self {
             entries: Some(vec![]),

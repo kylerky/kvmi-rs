@@ -20,8 +20,8 @@ use async_std::os::unix::io::AsRawFd;
 use async_std::sync::{Arc, Receiver};
 
 use kvmi::message::{
-    CommonEventReply, ControlEvent, GetRegisters, GetRegistersReply, GetVCPUNum, PFEventReply,
-    PauseVCPUs, SetSingleStep,
+    CommonEventReply, ControlEvent, ControlSPP, GetRegisters, GetRegistersReply, GetVCPUNum,
+    PFEventReply, PauseVCPUs, SetSingleStep,
 };
 use kvmi::DomainBuilder;
 
@@ -99,6 +99,14 @@ impl Domain {
         match paging {
             PageMode::IA32e => (),
             _ => return Err(Error::Unsupported(String::from("unsupported paging mode"))),
+        }
+
+        dom.send(ControlSPP::new(true)).await?;
+        debug!("spp enabled");
+        let vcpu_num = dom.send(GetVCPUNum).await? as u16;
+        for vcpu in 0..vcpu_num {
+            dom.send(ControlEvent::new(vcpu, EventKind::PF, true))
+                .await?;
         }
 
         let p_space = Arc::new(KVMIPhysical::from(dom));
@@ -201,6 +209,12 @@ impl Domain {
     pub async fn toggle_event(&self, vcpu: u16, kind: EventKind, enable: bool) -> Result<()> {
         let dom = self.k_vspace.get_base().get_dom();
         dom.send(ControlEvent::new(vcpu, kind, enable)).await?;
+        Ok(())
+    }
+
+    pub async fn toggle_spp(&self, enable: bool) -> Result<()> {
+        let dom = self.k_vspace.get_base().get_dom();
+        dom.send(ControlSPP::new(enable)).await?;
         Ok(())
     }
 

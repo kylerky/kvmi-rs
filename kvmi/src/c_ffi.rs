@@ -183,6 +183,72 @@ impl PageAccessEntryBuilder {
     }
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct PageWriteBitmap(u32);
+impl Default for PageWriteBitmap {
+    fn default() -> Self {
+        PageWriteBitmap(!0)
+    }
+}
+impl PageWriteBitmap {
+    pub fn set(&mut self, pos: u64) {
+        self.0 |= 1 << pos;
+    }
+
+    pub fn clear(&mut self, pos: u64) {
+        self.0 &= !(1 << pos);
+    }
+}
+
+#[derive(Debug)]
+#[repr(transparent)]
+pub struct PageWriteBitmapEntry(kvmi_page_write_bitmap_entry);
+
+pub struct BitmapEntryBuilder {
+    gpa: u64,
+    bitmap: PageWriteBitmap,
+}
+impl BitmapEntryBuilder {
+    pub fn new(gpa: u64) -> Self {
+        Self {
+            gpa,
+            bitmap: PageWriteBitmap::default(),
+        }
+    }
+
+    pub fn gpa(&mut self, gpa: u64) -> &mut Self {
+        self.gpa = gpa;
+        self
+    }
+
+    pub fn bitmap(&mut self, bitmap: PageWriteBitmap) -> &mut Self {
+        self.bitmap = bitmap;
+        self
+    }
+
+    pub fn set(&mut self, pos: u64) -> &mut Self {
+        self.bitmap.set(pos);
+        self
+    }
+
+    pub fn clear(&mut self, pos: u64) -> &mut Self {
+        self.bitmap.clear(pos);
+        self
+    }
+
+    pub fn get_bitmap(&self) -> PageWriteBitmap {
+        self.bitmap
+    }
+
+    pub fn build(&self) -> PageWriteBitmapEntry {
+        PageWriteBitmapEntry(kvmi_page_write_bitmap_entry {
+            gpa: self.gpa,
+            bitmap: self.bitmap.0,
+            padding: 0,
+        })
+    }
+}
+
 impl PartialEq for kvmi_get_registers_reply {
     fn eq(&self, other: &Self) -> bool {
         self.mode == other.mode
