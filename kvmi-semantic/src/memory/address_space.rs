@@ -40,10 +40,12 @@ pub trait AddressSpace {
 }
 
 cfg_if! {
-    if #[cfg(test)] {
-        pub use tests::MockKVMIPhysical as KVMIPhysical;
-    } else {
+    if #[cfg(not(test))] {
+        use kvmi::Domain;
         pub use kvmi_physical::*;
+    } else {
+        use tests::MockDomain as Domain;
+        pub use tests::MockKVMIPhysical as KVMIPhysical;
     }
 }
 

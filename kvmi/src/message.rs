@@ -436,7 +436,7 @@ impl PauseVCPUs {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct SetPageAccess {
     entries: Option<Vec<PageAccessEntry>>,
 }
@@ -729,6 +729,7 @@ impl BPEventReply {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct ReadPhysical {
     gpa: u64,
     size: u64,

@@ -129,7 +129,7 @@ impl KvmiEventBreakpoint {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 #[repr(transparent)]
 pub struct PageAccessEntry(kvmi_page_access_entry);
 
