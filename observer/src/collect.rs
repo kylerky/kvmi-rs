@@ -9,7 +9,7 @@ use async_std::prelude::*;
 use async_std::sync::Sender;
 use async_std::task;
 
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 
 use kvmi_semantic::address_space::*;
 use kvmi_semantic::event::*;
@@ -169,12 +169,18 @@ async fn handle_bp(
             dom.resume_from_bp(orig, event, extra, enable_ss).await?;
             Ok(())
         }
-        Err(e) => {
-            if let Err(err) = dom.resume_from_bp(orig, event, extra, false).await {
-                error!("Error resuming from bp: {}", err);
+        Err(e) => match e {
+            Error::InvalidVAddr => {
+                warn!("Invalid v addr");
+                dom.resume_from_bp(orig, event, extra, true).await
             }
-            Err(e)
-        }
+            _ => {
+                if let Err(err) = dom.resume_from_bp(orig, event, extra, false).await {
+                    error!("Error resuming from bp: {}", err);
+                }
+                Err(e)
+            }
+        },
     }
 }
 

@@ -87,7 +87,7 @@ fn run() -> Result<(), Error> {
     });
 
     let (rpc_addr, kvmi, _) = opt.get_paths();
-    let (log_tx, log_rx) = sync::channel(30);
+    let (log_tx, log_rx) = sync::channel(100);
     let close_rx2 = close_rx.clone();
     let collect_handle = task::spawn(async move {
         // keep the sender to prevent rpc from shutting down

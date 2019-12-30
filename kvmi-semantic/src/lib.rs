@@ -223,7 +223,7 @@ impl Domain {
 
     pub async fn handle_pf(&self, event: &Event, extra: &KvmiEventPF) -> Result<()> {
         let p_space = self.k_vspace.get_base();
-        p_space.invalidate(extra.as_raw_ref().gpa).await?;
+        p_space.evict(extra.as_raw_ref().gpa).await?;
         let dom = p_space.get_dom();
         dom.send(PFEventReply::new(&event, Action::Retry).unwrap())
             .await?;
