@@ -9,15 +9,15 @@ use async_std::prelude::*;
 use async_std::sync::Sender;
 use async_std::task;
 
-use log::{debug, error, info, warn};
+use log::{debug, error, info};
 
 use kvmi_semantic::address_space::*;
 use kvmi_semantic::event::*;
-use kvmi_semantic::memory;
+use kvmi_semantic::memory::{self, handle_table};
 use kvmi_semantic::tracing::functions::MSx64;
 use kvmi_semantic::{Action, Domain, Error, HSToWire, RekallProfile};
 
-use crate::kvmi_capnp::event;
+use crate::kvmi_capnp::{event, Access};
 
 use capnp::message::HeapAllocator;
 
@@ -155,36 +155,49 @@ async fn handle_bp(
         )));
     }
 
-    let pid = get_pid(dom, event, sregs).await?;
+    let (process, pid, proc_name) = get_process(dom, event, sregs).await?;
+
+    let fname = match get_file_info(dom, event, sregs, process).await {
+        Ok(fname) => {
+            dom.resume_from_bp(orig, event, extra, enable_ss).await?;
+            fname
+        }
+        Err(Error::InvalidVAddr) => {
+            debug!("Invalid virtual addr");
+            return dom.resume_from_bp(orig, event, extra, enable_ss).await;
+        }
+        Err(Error::FromUtf8(_)) => {
+            return dom.resume_from_bp(orig, event, extra, enable_ss).await;
+        }
+        Err(e) => {
+            if let Err(err) = dom.resume_from_bp(orig, event, extra, false).await {
+                error!("Error resuming from bp: {}", err);
+            }
+            return Err(e);
+        }
+    };
 
     let mut message = capnp::message::Builder::new_default();
     {
         let mut event_log = message.init_root::<event::Builder>();
         event_log.set_pid(pid);
-    }
-    log_tx.send(message).await;
+        event_log.set_proc_name(&proc_name);
 
-    match get_file_info(dom, event, sregs).await {
-        Ok(_) => {
-            dom.resume_from_bp(orig, event, extra, enable_ss).await?;
-            Ok(())
-        }
-        Err(e) => match e {
-            Error::InvalidVAddr => {
-                warn!("Invalid v addr");
-                dom.resume_from_bp(orig, event, extra, true).await
-            }
-            _ => {
-                if let Err(err) = dom.resume_from_bp(orig, event, extra, false).await {
-                    error!("Error resuming from bp: {}", err);
-                }
-                Err(e)
-            }
-        },
+        let detail = event_log.init_detail();
+        let mut file = detail.init_file();
+        file.set_name(&fname);
+        file.set_access(Access::Open);
     }
+
+    log_tx.send(message).await;
+    Ok(())
 }
 
-async fn get_pid(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<u64, Error> {
+async fn get_process(
+    dom: &mut Domain,
+    event: &Event,
+    sregs: &kvm_sregs,
+) -> Result<(IA32eAddrT, u64, String), Error> {
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
     let profile = dom.get_profile();
 
@@ -196,10 +209,27 @@ async fn get_pid(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<u
         .await?
         .ok_or(Error::InvalidVAddr)?;
     let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
-    Ok(pid)
+
+    let image_name_rva = profile.get_struct_field_offset("_EPROCESS", "ImageFileName")?;
+    let image_name = v_space
+        .read(process + image_name_rva, 15)
+        .await?
+        .ok_or(Error::InvalidVAddr)?;
+    let name_len = image_name
+        .iter()
+        .position(|&c| c == b'\0')
+        .unwrap_or_else(|| image_name.len());
+    let proc_name = String::from_utf8(image_name[..name_len].to_vec())?;
+
+    Ok((process, pid, proc_name))
 }
 
-async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<(), Error> {
+async fn get_file_info(
+    dom: &mut Domain,
+    event: &Event,
+    sregs: &kvm_sregs,
+    process: IA32eAddrT,
+) -> Result<String, Error> {
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
     let profile = dom.get_profile();
 
@@ -207,7 +237,7 @@ async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Re
     let args = MSx64::new(&v_space, regs, 3).await?;
     let obj_attr_ptr = args.get(2).unwrap();
     if *obj_attr_ptr == 0 {
-        return Ok(());
+        return Err(Error::InvalidVAddr);
     }
 
     let fname_rva = profile.get_struct_field_offset("_OBJECT_ATTRIBUTES", "ObjectName")?;
@@ -217,11 +247,39 @@ async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Re
         .ok_or(Error::InvalidVAddr)?;
     let fname_ptr = u64::from_ne_bytes(fname_ptr[..].try_into().unwrap());
     if fname_ptr == 0 || !IA32eVirtual::is_canonical(fname_ptr) {
-        return Ok(());
+        return Err(Error::InvalidVAddr);
     }
-    let _fname = memory::read_utf16(&v_space, fname_ptr).await?;
+    let mut fname = memory::read_utf8(&v_space, fname_ptr).await?;
 
-    Ok(())
+    if let Ok(dir) = get_root_dir(&v_space, process, *obj_attr_ptr, profile).await {
+        fname = format!("{}\\{}", dir, fname);
+    }
+
+    Ok(fname)
+}
+
+async fn get_root_dir(
+    v_space: &IA32eVirtual,
+    process: IA32eAddrT,
+    obj_attr_ptr: PhysicalAddrT,
+    profile: &RekallProfile,
+) -> Result<String, Error> {
+    let root_dir_ptr_rva =
+        profile.get_struct_field_offset("_OBJECT_ATTRIBUTES", "RootDirectory")?;
+    let root_dir_handle = v_space
+        .read(obj_attr_ptr + root_dir_ptr_rva, 8)
+        .await?
+        .ok_or(Error::InvalidVAddr)?;
+    let root_dir_handle = u64::from_ne_bytes(root_dir_handle[..].try_into().unwrap());
+    if root_dir_handle == 0 {
+        return Err(Error::InvalidVAddr);
+    }
+
+    let root_dir_ptr = handle_table::get_obj_by(v_space, root_dir_handle, process, profile).await?;
+    let body_rva = profile.get_struct_field_offset("_OBJECT_HEADER", "Body")?;
+    let name_rva = profile.get_struct_field_offset("_FILE_OBJECT", "FileName")?;
+    let dir_name = memory::read_utf8(&v_space, root_dir_ptr + body_rva + name_rva).await?;
+    Ok(dir_name)
 }
 
 async fn handle_ss(
