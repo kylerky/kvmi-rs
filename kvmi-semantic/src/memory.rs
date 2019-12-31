@@ -1,4 +1,5 @@
 pub mod address_space;
+pub mod handle_table;
 pub(super) mod process;
 
 use crate::{Error, RekallProfile, Result};
@@ -286,7 +287,7 @@ pub(super) async fn find_kernel_addr(
     Ok((kernel_base_va, kernel_base_pa, v_space))
 }
 
-pub async fn read_utf16(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
+pub async fn read_utf8(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
     let str_struct = v_space
         .read(addr, UNICODE_STRING_SZ)
         .await?
@@ -299,11 +300,7 @@ pub async fn read_utf16(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<Stri
         .read(buffer_ptr, length as usize)
         .await?
         .ok_or(Error::InvalidVAddr)?;
-    let buffer: Vec<u16> = buffer
-        .chunks_exact(2)
-        .map(|bytes| u16::from_ne_bytes(bytes.try_into().unwrap()))
-        .collect();
-    let res = String::from_utf16(&buffer[..])?;
+    let res = String::from_utf8(buffer)?;
 
     Ok(res)
 }

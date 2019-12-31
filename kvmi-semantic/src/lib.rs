@@ -33,7 +33,7 @@ use std::error;
 use std::fmt::{self, Display, Formatter};
 use std::io;
 use std::mem;
-use std::string::FromUtf16Error;
+use std::string::{FromUtf16Error, FromUtf8Error};
 
 use serde::Deserialize;
 
@@ -312,6 +312,23 @@ fn get_struct_field_offset(
     Ok(offset)
 }
 
+fn get_struct_size(profile: &RekallProfile, struct_name: &str) -> Result<u64> {
+    let struct_arr = profile
+        .structs
+        .get(struct_name)
+        .ok_or_else(|| Error::Profile(format!("Missing {}", struct_name)))?;
+    let sz = struct_arr
+        .get(0)
+        .ok_or_else(|| Error::Profile(format!("Missing {}[0]", struct_name)))?;
+    let sz = sz.as_u64().ok_or_else(|| {
+        Error::Profile(format!(
+            "{}[0] is not a json number that can fit into u64",
+            struct_name
+        ))
+    })?;
+    Ok(sz)
+}
+
 pub fn get_ptb_from(sregs: &kvm_sregs) -> PhysicalAddrT {
     sregs.cr3 & CR3_MASK
 }
@@ -341,6 +358,10 @@ impl RekallProfile {
         get_struct_field_offset(self, struct_name, field_name)
     }
 
+    pub fn get_struct_size(&self, struct_name: &str) -> Result<u64> {
+        get_struct_size(self, struct_name)
+    }
+
     pub fn get_kfunc_offset(&self, func: &str) -> Result<IA32eAddrT> {
         get_kfunc_offset(self, func)
     }
@@ -360,6 +381,7 @@ pub enum Error {
     PageBoundary,
     InvalidVAddr,
     FromUtf16(FromUtf16Error),
+    FromUtf8(FromUtf8Error),
 }
 
 impl Display for Error {
@@ -376,6 +398,7 @@ impl Display for Error {
             KVMI(e) => write!(f, "{}", e),
             Profile(e) => write!(f, "Error in JSON profile: {}", e),
             FromUtf16(e) => write!(f, "Error converting from UTF-16: {}", e),
+            FromUtf8(e) => write!(f, "Error converting from UTF-8: {}", e),
         }
     }
 }
@@ -392,7 +415,7 @@ impl From<Error> for io::Error {
         match e {
             Unsupported(_) => io::Error::new(io::ErrorKind::Other, e),
             KernelVAddr | KernelPAddr | PageTable | PageBoundary | InvalidVAddr | Profile(_)
-            | FromUtf16(_) => io::Error::new(io::ErrorKind::InvalidData, e),
+            | FromUtf16(_) | FromUtf8(_) => io::Error::new(io::ErrorKind::InvalidData, e),
             WrongEvent => io::Error::new(io::ErrorKind::InvalidInput, e),
             KVMI(kvmi_err) => kvmi_err.into(),
         }
@@ -402,5 +425,11 @@ impl From<Error> for io::Error {
 impl From<FromUtf16Error> for Error {
     fn from(e: FromUtf16Error) -> Self {
         Error::FromUtf16(e)
+    }
+}
+
+impl From<FromUtf8Error> for Error {
+    fn from(e: FromUtf8Error) -> Self {
+        Error::FromUtf8(e)
     }
 }

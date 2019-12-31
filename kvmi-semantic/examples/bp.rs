@@ -282,7 +282,11 @@ async fn get_pid(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<u
     Ok(pid)
 }
 
-async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<(), Error> {
+async fn get_file_info(
+    dom: &mut Domain,
+    event: &Event,
+    sregs: &kvm_sregs,
+) -> Result<String, Error> {
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
     let profile = dom.get_profile();
 
@@ -290,7 +294,7 @@ async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Re
     let args = MSx64::new(&v_space, regs, 3).await?;
     let obj_attr_ptr = args.get(2).unwrap();
     if *obj_attr_ptr == 0 {
-        return Ok(());
+        return Err(Error::InvalidVAddr);
     }
 
     let fname_rva = profile.get_struct_field_offset("_OBJECT_ATTRIBUTES", "ObjectName")?;
@@ -300,12 +304,11 @@ async fn get_file_info(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Re
         .ok_or(Error::InvalidVAddr)?;
     let fname_ptr = u64::from_ne_bytes(fname_ptr[..].try_into().unwrap());
     if fname_ptr == 0 || !IA32eVirtual::is_canonical(fname_ptr) {
-        return Ok(());
+        return Err(Error::InvalidVAddr);
     }
-    let fname = memory::read_utf16(&v_space, fname_ptr).await?;
-    println!("fname: {}", fname);
+    let fname = memory::read_utf8(&v_space, fname_ptr).await?;
 
-    Ok(())
+    Ok(fname)
 }
 
 async fn handle_ss(
