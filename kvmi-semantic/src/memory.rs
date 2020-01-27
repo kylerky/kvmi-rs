@@ -2,6 +2,9 @@ pub mod address_space;
 pub mod handle_table;
 pub(super) mod process;
 
+pub mod list;
+pub mod modules;
+
 use crate::{Error, RekallProfile, Result};
 use crate::{
     EPROCESS, IA32_CSTAR, IA32_LSTAR, KPROCESS, KUSER_SHARED_DATA, LLP64_ULONG_SZ, PAGE_SHIFT,
@@ -301,6 +304,28 @@ pub async fn read_utf8(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<Strin
         .await?
         .ok_or(Error::InvalidVAddr)?;
     let res = String::from_utf8(buffer)?;
+
+    Ok(res)
+}
+
+pub async fn read_utf16(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
+    let str_struct = v_space
+        .read(addr, UNICODE_STRING_SZ)
+        .await?
+        .ok_or(Error::InvalidVAddr)?;
+
+    let length = u16::from_ne_bytes(str_struct[..2].try_into().unwrap());
+    let buffer_ptr = IA32eAddrT::from_ne_bytes(str_struct[8..].try_into().unwrap());
+
+    let buffer = v_space
+        .read(buffer_ptr, length as usize)
+        .await?
+        .ok_or(Error::InvalidVAddr)?;
+    let buffer: Vec<u16> = buffer
+        .chunks_exact(2)
+        .map(|bytes| u16::from_ne_bytes(bytes.try_into().unwrap()))
+        .collect();
+    let res = String::from_utf16(&buffer[..])?;
 
     Ok(res)
 }

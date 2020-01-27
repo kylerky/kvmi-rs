@@ -2,7 +2,7 @@
 mod tests;
 
 pub mod event;
-pub use memory::address_space;
+pub use memory::{address_space, modules};
 
 pub use kvmi::{Action, HSToWire};
 
@@ -267,6 +267,16 @@ impl Domain {
         let process = process::get_current_process(&self.k_vspace, sregs, &self.profile).await?;
         Ok(process)
     }
+
+    pub async fn find_module(&self, expect_name: &str) -> Result<IA32eAddrT> {
+        modules::find_module(
+            &self.k_vspace,
+            &self.profile,
+            self.kernel_base_va,
+            expect_name,
+        )
+        .await
+    }
 }
 
 fn get_ksymbol_offset(profile: &RekallProfile, symbol: &str) -> Result<IA32eAddrT> {
@@ -382,6 +392,7 @@ pub enum Error {
     InvalidVAddr,
     FromUtf16(FromUtf16Error),
     FromUtf8(FromUtf8Error),
+    NotFound(String),
 }
 
 impl Display for Error {
@@ -399,6 +410,7 @@ impl Display for Error {
             Profile(e) => write!(f, "Error in JSON profile: {}", e),
             FromUtf16(e) => write!(f, "Error converting from UTF-16: {}", e),
             FromUtf8(e) => write!(f, "Error converting from UTF-8: {}", e),
+            NotFound(e) => write!(f, "Not found: {}", e),
         }
     }
 }
@@ -414,8 +426,10 @@ impl From<Error> for io::Error {
         use Error::*;
         match e {
             Unsupported(_) => io::Error::new(io::ErrorKind::Other, e),
-            KernelVAddr | KernelPAddr | PageTable | PageBoundary | InvalidVAddr | Profile(_)
-            | FromUtf16(_) | FromUtf8(_) => io::Error::new(io::ErrorKind::InvalidData, e),
+            NotFound(_) | KernelVAddr | KernelPAddr | PageTable | PageBoundary | InvalidVAddr
+            | Profile(_) | FromUtf16(_) | FromUtf8(_) => {
+                io::Error::new(io::ErrorKind::InvalidData, e)
+            }
             WrongEvent => io::Error::new(io::ErrorKind::InvalidInput, e),
             KVMI(kvmi_err) => kvmi_err.into(),
         }

@@ -22,6 +22,7 @@ use crate::kvmi_capnp::{event, Access};
 use capnp::message::HeapAllocator;
 
 const CPL_MASK: u16 = 3;
+const TCPIP_SYS: &str = "tcpip.sys";
 
 struct EventHandler<'a> {
     dom: &'a mut Domain,
@@ -123,6 +124,9 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
         *bp_set = true;
         dom.set_bp_by_physical(gpa).await?;
     }
+
+    let tcpip_base = dom.find_module(TCPIP_SYS).await?;
+    debug!("tcpip.sys base: 0x{:x?}", tcpip_base);
 
     dom.reply(event, Continue).await?;
     Ok(())
