@@ -31,6 +31,9 @@ struct Opt {
 
     #[structopt(short, long)]
     profile: PathBuf,
+
+    #[structopt(short, long)]
+    tcpip_profile: PathBuf,
 }
 impl Opt {
     fn get_paths(self) -> (SocketAddr, PathBuf, PathBuf) {
@@ -56,6 +59,9 @@ fn run() -> Result<(), Error> {
 
     let profile = fs::read_to_string(opt.profile.as_path())?;
     let profile: RekallProfile = serde_json::from_str(&profile[..])?;
+
+    let tcpip_profile = fs::read_to_string(opt.tcpip_profile.as_path())?;
+    let tcpip_profile: RekallProfile = serde_json::from_str(&tcpip_profile[..])?;
 
     let (rpc_sd_tx, rpc_sd_rx) = sync::channel::<()>(1);
     let (collect_sd_tx, collect_sd_rx) = sync::channel::<()>(1);
@@ -89,13 +95,14 @@ fn run() -> Result<(), Error> {
     let (rpc_addr, kvmi, _) = opt.get_paths();
     let (log_tx, log_rx) = sync::channel(100);
     let close_rx2 = close_rx.clone();
+
     let collect_handle = task::spawn(async move {
         // keep the sender to prevent rpc from shutting down
         let _tx = collect_sd_tx;
 
         let mut close_rx2 = close_rx2.fuse();
         select! {
-            res = collect::listen(kvmi, profile, log_tx).fuse() => res,
+            res = collect::listen(kvmi, profile, tcpip_profile, log_tx).fuse() => res,
             _ = close_rx2.next() => Ok(()),
         }
     });

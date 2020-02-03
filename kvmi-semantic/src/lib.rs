@@ -50,6 +50,7 @@ pub struct Domain {
     event_rx: Receiver<Event>,
     kernel_base_va: IA32eAddrT,
     profile: RekallProfile,
+    tcpip_profile: RekallProfile,
 }
 
 #[derive(Debug, PartialEq)]
@@ -80,6 +81,7 @@ impl Domain {
         stream: T,
         validator: F,
         profile: RekallProfile,
+        tcpip_profile: RekallProfile,
         ptb: Option<u64>,
     ) -> Result<Self>
     where
@@ -124,6 +126,7 @@ impl Domain {
             event_rx,
             kernel_base_va,
             profile,
+            tcpip_profile,
         })
     }
 
@@ -152,7 +155,7 @@ impl Domain {
 
     pub async fn traverse_process_list(&self) -> Result<()> {
         let process_head =
-            self.kernel_base_va + get_ksymbol_offset(&self.profile, "PsActiveProcessHead")?;
+            self.kernel_base_va + get_symbol_offset(&self.profile, "PsActiveProcessHead")?;
         process::process_list_traversal(
             self.k_vspace.clone(),
             |processes| Self::print_eprocess(&self.k_vspace, processes, &self.profile),
@@ -263,6 +266,10 @@ impl Domain {
         &self.profile
     }
 
+    pub fn get_tcpip_profile(&self) -> &RekallProfile {
+        &self.tcpip_profile
+    }
+
     pub async fn get_current_process(&self, sregs: &kvm_sregs) -> Result<IA32eAddrT> {
         let process = process::get_current_process(&self.k_vspace, sregs, &self.profile).await?;
         Ok(process)
@@ -279,7 +286,7 @@ impl Domain {
     }
 }
 
-fn get_ksymbol_offset(profile: &RekallProfile, symbol: &str) -> Result<IA32eAddrT> {
+fn get_symbol_offset(profile: &RekallProfile, symbol: &str) -> Result<IA32eAddrT> {
     profile
         .constants
         .get(symbol)
@@ -287,7 +294,7 @@ fn get_ksymbol_offset(profile: &RekallProfile, symbol: &str) -> Result<IA32eAddr
         .ok_or_else(|| Error::Profile(format!("Missing {}", symbol)))
 }
 
-fn get_kfunc_offset(profile: &RekallProfile, func: &str) -> Result<IA32eAddrT> {
+fn get_func_offset(profile: &RekallProfile, func: &str) -> Result<IA32eAddrT> {
     profile
         .functions
         .get(func)
@@ -356,8 +363,8 @@ pub struct RekallProfile {
 }
 
 impl RekallProfile {
-    pub fn get_ksymbol_offset(&self, symbol: &str) -> Result<IA32eAddrT> {
-        get_ksymbol_offset(self, symbol)
+    pub fn get_symbol_offset(&self, symbol: &str) -> Result<IA32eAddrT> {
+        get_symbol_offset(self, symbol)
     }
 
     pub fn get_struct_field_offset(
@@ -372,8 +379,8 @@ impl RekallProfile {
         get_struct_size(self, struct_name)
     }
 
-    pub fn get_kfunc_offset(&self, func: &str) -> Result<IA32eAddrT> {
-        get_kfunc_offset(self, func)
+    pub fn get_func_offset(&self, func: &str) -> Result<IA32eAddrT> {
+        get_func_offset(self, func)
     }
 }
 

@@ -12,7 +12,7 @@ pub async fn get_sys_module_list<'a, 'b>(
     kernel_base: IA32eAddrT,
     profile: &'b RekallProfile,
 ) -> Result<ForwardIter<'a>> {
-    let head_ptr = profile.get_ksymbol_offset("PsLoadedModuleList")?;
+    let head_ptr = profile.get_symbol_offset("PsLoadedModuleList")?;
     let flink_rva = profile.get_struct_field_offset(LIST_ENTRY, FLINK)?;
 
     let head = k_vspace.read(kernel_base + head_ptr, PTR_SZ).await?;

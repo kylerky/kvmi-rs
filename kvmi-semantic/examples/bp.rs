@@ -137,7 +137,7 @@ async fn listen(mut opt: Opt) -> Result<(), io::Error> {
         .await?;
 
         let profile = dom.get_profile();
-        let v_addr = dom.get_kernel_base_va() + profile.get_kfunc_offset("NtOpenFile")?;
+        let v_addr = dom.get_kernel_base_va() + profile.get_func_offset("NtOpenFile")?;
         let v_space = dom.get_k_vspace();
         let p_space = v_space.get_base();
         let gpa = v_space

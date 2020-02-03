@@ -37,7 +37,7 @@ async fn read_kptr(
     kernel_base_va: u64,
     profile: &RekallProfile,
 ) -> Result<Option<u64>> {
-    let ptr_rva = crate::get_ksymbol_offset(profile, symbol)?;
+    let ptr_rva = crate::get_symbol_offset(profile, symbol)?;
 
     let data = addr_space.read(kernel_base_va + ptr_rva, PTR_SZ).await?;
     Ok(data.map(|d| u64::from_ne_bytes(d[..].try_into().unwrap())))
@@ -61,7 +61,7 @@ pub(super) async fn get_system_page_table(
     }
 
     debug!("trying to get page table base from process list");
-    let process_head = kernel_base_va + crate::get_ksymbol_offset(profile, "PsActiveProcessHead")?;
+    let process_head = kernel_base_va + crate::get_symbol_offset(profile, "PsActiveProcessHead")?;
     debug!("process_head: 0x{:x?}", process_head);
     let ptb = {
         process::process_list_traversal(
