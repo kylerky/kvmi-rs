@@ -17,10 +17,11 @@ struct Event {
     detail :union {
         file @2 :FileEvent;
         fork @3 :ForkEvent;
+        tcp @4 :TcpEvent;
     }
 }
 
-enum Access {
+enum FileAccess {
     read @0;
     write @1;
     exec @2;
@@ -29,9 +30,21 @@ enum Access {
 
 struct FileEvent {
     name @0 :Text;
-    access @1 :Access;
+    access @1 :FileAccess;
 }
 
 struct ForkEvent {
     pid @0 :UInt64;
+}
+
+enum TcpAccess {
+    recv @0;
+    send @1;
+    connect @2;
+    accept @3;
+}
+
+struct TcpEvent {
+    address @0 :Text;
+    access @1 :TcpAccess;
 }

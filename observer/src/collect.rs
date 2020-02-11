@@ -57,7 +57,6 @@ impl<'a> EventHandler<'a> {
         use EventExtra::*;
 
         let extra = event.get_extra();
-        debug!("handle_evnt event: {:#?}", event.get_extra());
         match extra {
             PauseVCPU => handle_pause(self, &event).await?,
             Breakpoint(bp) => handle_bp(self, &event, bp, true).await?,
@@ -138,7 +137,10 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
     if handler.bps.is_empty() {
         let mut kernel_fns: Vec<(&str, BPHandler)> =
             vec![("NtOpenFile", Box::new(bp_handlers::open_file))];
-        let mut tcp_fns = vec![];
+        let mut tcp_fns: Vec<(&str, BPHandler)> = vec![(
+            "TcpCreateAndConnectTcbComplete",
+            Box::new(bp_handlers::tcp_receive),
+        )];
 
         let dom = &handler.dom;
         let vcpu = event.get_vcpu();
@@ -177,7 +179,6 @@ async fn handle_bp(
     enable_ss: bool,
 ) -> Result<(), Error> {
     let dom = &mut handler.dom;
-    debug!("handle_bp: gpa: 0x{:x?}", extra.get_gpa());
     let (orig, bp_handler) = match handler.bps.get(&extra.get_gpa()) {
         None => {
             dom.reply(event, Action::Continue).await?;

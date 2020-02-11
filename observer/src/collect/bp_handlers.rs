@@ -1,6 +1,9 @@
 mod file;
 pub use file::*;
 
+mod tcp;
+pub use tcp::*;
+
 use kvmi_semantic::address_space::*;
 use kvmi_semantic::event::*;
 use kvmi_semantic::{Domain, Error, RekallProfile};

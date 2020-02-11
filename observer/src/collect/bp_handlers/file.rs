@@ -5,7 +5,7 @@ use kvmi_semantic::tracing::functions::MSx64;
 use kvmi_semantic::{Domain, Error, RekallProfile};
 
 use crate::kvmi_capnp::event;
-use crate::kvmi_capnp::Access;
+use crate::kvmi_capnp::FileAccess;
 
 use std::convert::TryInto;
 
@@ -67,7 +67,7 @@ async fn _open_file(
         let detail = event_log.get_detail();
         let mut file = detail.init_file();
         file.set_name(&fname);
-        file.set_access(Access::Open);
+        file.set_access(FileAccess::Open);
     }
 
     log_tx.send(message).await;
