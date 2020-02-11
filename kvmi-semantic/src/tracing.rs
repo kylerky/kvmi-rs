@@ -36,7 +36,7 @@ pub(super) async fn resume_from_bp(
         let vcpu = event.get_vcpu();
         dom.send(SetSingleStep::new(vcpu, true)).await?;
     }
-    let bp_reply = BPEventReply::new(event, Retry, enable_ss).ok_or(Error::WrongEvent)?;
+    let bp_reply = BPEventReply::new(event, Retry, false).ok_or(Error::WrongEvent)?;
     dom.send(bp_reply).await?;
     Ok(())
 }

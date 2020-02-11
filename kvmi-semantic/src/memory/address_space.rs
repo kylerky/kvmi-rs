@@ -1,6 +1,9 @@
 #[cfg(test)]
 mod tests;
 
+mod cache;
+pub use cache::PageCache;
+
 use cfg_if::cfg_if;
 
 use crate::{Error, Result};
@@ -9,12 +12,8 @@ use async_std::sync::{Arc, Mutex, RwLock};
 
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::time::{Duration, Instant};
 
-use kvmi::message::{ReadPhysical, SetPageAccess, WritePhysical};
-use kvmi::PageAccessEntryBuilder;
-
-use lru::LruCache;
+use kvmi::message::WritePhysical;
 
 // [12..52] bit of the entry
 const ENTRY_POINTER_MASK: u64 = (!0u64) << 24 >> 12;
@@ -25,11 +24,9 @@ const CANON_MASK: u64 = 0xffff_8000_0000_0000;
 
 pub type PhysicalAddrT = u64;
 const PADDR_OFFSET: PhysicalAddrT = 0xfff;
-const PADDR_KEY: PhysicalAddrT = !PADDR_OFFSET;
 
 const PHYSICAL_PAGE_SZ: PhysicalAddrT = 1 << 12;
 
-const VOLATILE_TIMEOUT: Duration = Duration::from_millis(10);
 
 pub type IA32eAddrT = u64;
 
@@ -50,18 +47,12 @@ cfg_if! {
     }
 }
 
-const CACHE_CAP: usize = 1 << 18;
 #[allow(dead_code)]
 mod kvmi_physical {
     use super::*;
     pub struct KVMIPhysical {
         dom: Domain,
-        cache: Mutex<Cache>,
-    }
-
-    struct Cache {
-        pages: LruCache<PhysicalAddrT, Vec<u8>>,
-        volatile: HashMap<PhysicalAddrT, Instant>,
+        cache: Mutex<PageCache>,
     }
 
     impl AddressSpace for KVMIPhysical {
@@ -72,10 +63,7 @@ mod kvmi_physical {
         pub fn new(dom: Domain) -> Self {
             Self {
                 dom,
-                cache: Mutex::new(Cache {
-                    pages: LruCache::new(CACHE_CAP),
-                    volatile: HashMap::new(),
-                }),
+                cache: Mutex::new(PageCache::new()),
             }
         }
 
@@ -84,80 +72,8 @@ mod kvmi_physical {
         }
 
         pub async fn read(&self, addr: PhysicalAddrT, sz: usize) -> Result<Vec<u8>> {
-            if sz == 0 {
-                return Ok(vec![]);
-            }
-
-            let key = addr & PADDR_KEY;
-            let offset = (addr & PADDR_OFFSET) as usize;
-
-            let pages_num = (offset + sz - 1) / PHYSICAL_PAGE_SZ as usize;
-            match pages_num {
-                0 => self.read_within_page(key, offset, sz).await,
-                _ => {
-                    let mut res = self
-                        .read_within_page(key, offset, PHYSICAL_PAGE_SZ as usize - offset)
-                        .await?;
-                    for i in 1..pages_num as u64 {
-                        let mut v = self
-                            .read_within_page(
-                                key + i * PHYSICAL_PAGE_SZ,
-                                0,
-                                PHYSICAL_PAGE_SZ as usize,
-                            )
-                            .await?;
-                        res.append(&mut v)
-                    }
-
-                    let remaining = offset + sz - pages_num * PHYSICAL_PAGE_SZ as usize;
-                    let mut v = self
-                        .read_within_page(key + pages_num as u64 * PHYSICAL_PAGE_SZ, 0, remaining)
-                        .await?;
-                    res.append(&mut v);
-                    Ok(res)
-                }
-            }
-        }
-
-        async fn read_within_page(
-            &self,
-            key: PhysicalAddrT,
-            offset: usize,
-            sz: usize,
-        ) -> Result<Vec<u8>> {
             let mut cache = self.cache.lock().await;
-            match cache.pages.get(&key) {
-                Some(vec) => Ok(vec[offset..offset + sz].to_vec()),
-                None => {
-                    match cache.volatile.get(&key) {
-                        Some(inst) if Instant::now().duration_since(*inst) >= VOLATILE_TIMEOUT => {
-                            cache.volatile.remove(&key);
-                        }
-                        Some(_) => {
-                            return Ok(self
-                                .dom
-                                .send(ReadPhysical::new(key | offset as u64, sz as u64))
-                                .await?);
-                        }
-                        None => (),
-                    }
-
-                    let mut msg = SetPageAccess::new();
-                    let mut builder = PageAccessEntryBuilder::new(key);
-                    builder.set_read().set_execute();
-                    msg.push(builder.build());
-                    self.dom.send(msg).await?;
-
-                    let page = self
-                        .dom
-                        .send(ReadPhysical::new(key, PHYSICAL_PAGE_SZ))
-                        .await?;
-                    let ret = page[offset..offset + sz].to_vec();
-                    cache.pages.put(key, page);
-
-                    Ok(ret)
-                }
-            }
+            cache.read(&self.dom, addr, sz).await
         }
 
         pub async fn write(&self, addr: PhysicalAddrT, data: Vec<u8>) -> Result<()> {
@@ -170,17 +86,8 @@ mod kvmi_physical {
         }
 
         pub async fn evict(&self, addr: PhysicalAddrT) -> Result<()> {
-            let key = addr & PADDR_KEY;
             let mut cache = self.cache.lock().await;
-            if cache.pages.pop(&key).is_some() {
-                let mut msg = SetPageAccess::new();
-                let mut builder = PageAccessEntryBuilder::new(key);
-                builder.set_read().set_write().set_execute();
-                msg.push(builder.build());
-                self.dom.send(msg).await?;
-            }
-            cache.volatile.insert(key, Instant::now());
-            Ok(())
+            cache.remove(&self.dom, addr).await
         }
 
         // validate if the access is across page boundary
