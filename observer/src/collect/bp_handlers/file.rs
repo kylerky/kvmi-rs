@@ -108,6 +108,7 @@ async fn get_file_info(
     Ok(fname)
 }
 
+#[allow(dead_code)]
 async fn get_root_dir(
     v_space: &IA32eVirtual,
     process: IA32eAddrT,

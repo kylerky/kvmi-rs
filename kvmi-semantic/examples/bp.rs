@@ -128,10 +128,14 @@ async fn listen(mut opt: Opt) -> Result<(), io::Error> {
         let stream = stream?;
 
         let rekall_profile: RekallProfile = serde_json::from_str(REKALL_PROFILE)?;
+        // will not use tcpip_profile
+        // so just use REKALL_PROFILE as a place holder
+        let tcpip_profile: RekallProfile = serde_json::from_str(REKALL_PROFILE)?;
         let mut dom = Domain::new(
             stream,
             |_, _, _| Some(HSToWire::new()),
             rekall_profile,
+            tcpip_profile,
             opt.ptb.take(),
         )
         .await?;
