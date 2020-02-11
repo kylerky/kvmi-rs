@@ -11,7 +11,7 @@ use std::convert::TryInto;
 
 use futures::future::{BoxFuture, FutureExt};
 
-use log::{debug, error};
+use log::error;
 
 use async_std::sync::Sender;
 
@@ -45,7 +45,7 @@ async fn _open_file(
             fname
         }
         Err(Error::InvalidVAddr) => {
-            debug!("Invalid virtual addr");
+            // debug!("Invalid virtual addr");
             return dom.resume_from_bp(orig, event, extra, enable_ss).await;
         }
         Err(Error::FromUtf8(_)) => {
@@ -78,7 +78,7 @@ async fn get_file_info(
     dom: &mut Domain,
     event: &Event,
     sregs: &kvm_sregs,
-    process: IA32eAddrT,
+    _process: IA32eAddrT,
 ) -> Result<String, Error> {
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
     let profile = dom.get_profile();
@@ -99,11 +99,11 @@ async fn get_file_info(
     if fname_ptr == 0 || !IA32eVirtual::is_canonical(fname_ptr) {
         return Err(Error::InvalidVAddr);
     }
-    let mut fname = memory::read_utf8(&v_space, fname_ptr).await?;
+    let fname = memory::read_utf8(&v_space, fname_ptr).await?;
 
-    if let Ok(dir) = get_root_dir(&v_space, process, *obj_attr_ptr, profile).await {
-        fname = format!("{}\\{}", dir, fname);
-    }
+    // if let Ok(dir) = get_root_dir(&v_space, process, *obj_attr_ptr, profile).await {
+    //     fname = format!("{}\\{}", dir, fname);
+    // }
 
     Ok(fname)
 }

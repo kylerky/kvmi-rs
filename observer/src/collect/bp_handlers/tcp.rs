@@ -3,15 +3,17 @@ use kvmi_semantic::memory::address_space::*;
 use kvmi_semantic::tracing::functions::MSx64;
 use kvmi_semantic::{Domain, Error};
 
+use crate::kvmi_capnp::event;
+use crate::kvmi_capnp::TcpAccess;
+
 use std::convert::TryInto;
+use std::net::Ipv4Addr;
 
 use async_std::sync::Sender;
 
 use futures::future::{BoxFuture, FutureExt};
 
 use crate::collect::LogChT;
-
-use log::debug;
 
 pub fn tcp_receive<'a>(
     dom: &'a mut Domain,
@@ -33,18 +35,33 @@ async fn _tcp_receive(
     orig: u8,
 ) -> Result<(), Error> {
     let sregs = &event.get_arch().sregs;
-    let (process, pid, proc_name) = super::get_process(dom, event, sregs).await?;
+    let (_, pid, proc_name) = super::get_process(dom, event, sregs).await?;
 
     let regs = &event.get_arch().regs;
     let v_space = dom.get_k_vspace();
 
-    let res = get_ip(v_space, regs).await;
-    let res2 = dom.resume_from_bp(orig, event, extra, enable_ss).await;
+    let addr = match get_ip(v_space, regs).await {
+        Err(_) => return dom.resume_from_bp(orig, event, extra, enable_ss).await,
+        Ok(ip) => ip,
+    };
+    dom.resume_from_bp(orig, event, extra, enable_ss).await?;
 
-    res.and(res2)
+    let mut message = capnp::message::Builder::new_default();
+    {
+        let mut event_log = message.init_root::<event::Builder>();
+        super::set_msg_proc(event_log.reborrow(), pid, &proc_name);
+
+        let detail = event_log.get_detail();
+        let mut tcp = detail.init_tcp();
+        tcp.set_address(&format!("{}", addr));
+        tcp.set_access(TcpAccess::Connect);
+    }
+
+    log_tx.send(message).await;
+    Ok(())
 }
 
-async fn get_ip(v_space: &IA32eVirtual, regs: &kvm_regs) -> Result<(), Error> {
+async fn get_ip(v_space: &IA32eVirtual, regs: &kvm_regs) -> Result<Ipv4Addr, Error> {
     let args = MSx64::new(&v_space, regs, 1).await?;
 
     let p_tcp_end = args.get(0).unwrap();
@@ -65,7 +82,8 @@ async fn get_ip(v_space: &IA32eVirtual, regs: &kvm_regs) -> Result<(), Error> {
         .read(p_remote_ip, 4)
         .await?
         .ok_or(Error::InvalidVAddr)?;
-    debug!("remote ip: {:?}", remote_ip);
+    let remote_ip: [u8; 4] = remote_ip[..].try_into().unwrap();
+    let addr = Ipv4Addr::from(remote_ip);
 
-    Ok(())
+    Ok(addr)
 }

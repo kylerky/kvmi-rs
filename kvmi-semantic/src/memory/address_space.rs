@@ -27,7 +27,6 @@ const PADDR_OFFSET: PhysicalAddrT = 0xfff;
 
 const PHYSICAL_PAGE_SZ: PhysicalAddrT = 1 << 12;
 
-
 pub type IA32eAddrT = u64;
 
 pub trait AddressSpace {

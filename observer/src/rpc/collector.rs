@@ -104,7 +104,7 @@ pub async fn listen(addr: &SocketAddr, event_log_rx: Receiver<LogChT>) -> Result
     let observer = publisher::ToClient::new(rpc_server).into_client::<capnp_rpc::Server>();
 
     // start draining the event channel
-    let (mut drain_tx, drain_rx) = sync::channel(1);
+    let (mut drain_tx, drain_rx) = sync::channel(100);
     let mut drain_handle = task::spawn(drain(event_log_rx.clone(), drain_rx));
 
     while let Some(stream) = listener.incoming().next().await {
@@ -131,7 +131,7 @@ pub async fn listen(addr: &SocketAddr, event_log_rx: Receiver<LogChT>) -> Result
         }
 
         // start draining the event channel
-        let (tx, drain_rx) = sync::channel(1);
+        let (tx, drain_rx) = sync::channel(100);
         drain_tx = tx;
         drain_handle = task::spawn(drain(event_log_rx.clone(), drain_rx));
     }
