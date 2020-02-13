@@ -15,17 +15,17 @@ use log::error;
 
 use async_std::sync::Sender;
 
-use crate::collect::LogChT;
+use crate::collect::{BPAction, LogChT};
 
 #[allow(dead_code)]
-pub fn open_file<'a>(
+pub(crate) fn open_file<'a>(
     dom: &'a mut Domain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
     log_tx: &'a Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> BoxFuture<'a, Result<(), Error>> {
+) -> BoxFuture<'a, Result<BPAction, Error>> {
     open_file_(dom, event, extra, log_tx, enable_ss, orig).boxed()
 }
 
@@ -36,7 +36,7 @@ async fn open_file_(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<(), Error> {
+) -> Result<BPAction, Error> {
     let sregs = &event.get_arch().sregs;
     let (process, pid, proc_name) = super::get_process(dom, event, sregs).await?;
 
@@ -46,8 +46,8 @@ async fn open_file_(
             fname
         }
         Err(Error::FromUtf16(_)) | Err(Error::InvalidVAddr) => {
-            // debug!("Invalid virtual addr");
-            return dom.resume_from_bp(orig, event, extra, enable_ss).await;
+            dom.resume_from_bp(orig, event, extra, enable_ss).await?;
+            return Ok(BPAction::None);
         }
         Err(e) => {
             if let Err(err) = dom.resume_from_bp(orig, event, extra, false).await {
@@ -69,7 +69,7 @@ async fn open_file_(
     }
 
     log_tx.send(message).await;
-    Ok(())
+    Ok(BPAction::None)
 }
 
 async fn get_file_info(
@@ -130,14 +130,14 @@ async fn get_root_dir(
     Ok(dir_name)
 }
 
-pub fn read_file<'a>(
+pub(crate) fn read_file<'a>(
     dom: &'a mut Domain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
     log_tx: &'a Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> BoxFuture<'a, Result<(), Error>> {
+) -> BoxFuture<'a, Result<BPAction, Error>> {
     read_file_(dom, event, extra, log_tx, enable_ss, orig).boxed()
 }
 
@@ -148,18 +148,18 @@ async fn read_file_(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<(), Error> {
+) -> Result<BPAction, Error> {
     handle_modify(dom, FileAccess::Read, event, extra, log_tx, enable_ss, orig).await
 }
 
-pub fn write_file<'a>(
+pub(crate) fn write_file<'a>(
     dom: &'a mut Domain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
     log_tx: &'a Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> BoxFuture<'a, Result<(), Error>> {
+) -> BoxFuture<'a, Result<BPAction, Error>> {
     write_file_(dom, event, extra, log_tx, enable_ss, orig).boxed()
 }
 
@@ -170,7 +170,7 @@ async fn write_file_(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<(), Error> {
+) -> Result<BPAction, Error> {
     handle_modify(
         dom,
         FileAccess::Write,
@@ -191,13 +191,17 @@ async fn handle_modify(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<(), Error> {
+) -> Result<BPAction, Error> {
     match handle_modify_(dom, access, event, extra, log_tx, enable_ss, orig).await {
-        Ok(()) | Err(Error::FromUtf16(_)) | Err(Error::InvalidVAddr) => {
-            dom.resume_from_bp(orig, event, extra, enable_ss).await
+        Ok(r) => Ok(r),
+        Err(Error::FromUtf16(_)) | Err(Error::InvalidVAddr) => {
+            dom.resume_from_bp(orig, event, extra, enable_ss).await?;
+            Ok(BPAction::None)
         }
         Err(e) => {
-            let _ = dom.resume_from_bp(orig, event, extra, enable_ss).await;
+            if let Err(err) = dom.resume_from_bp(orig, event, extra, enable_ss).await {
+                error!("Error resuming from bp: {}", err);
+            }
             Err(e)
         }
     }
@@ -207,11 +211,11 @@ async fn handle_modify_(
     dom: &mut Domain,
     access: FileAccess,
     event: &Event,
-    _extra: &KvmiEventBreakpoint,
-    _log_tx: &Sender<LogChT>,
-    _enable_ss: bool,
-    _orig: u8,
-) -> Result<(), Error> {
+    extra: &KvmiEventBreakpoint,
+    log_tx: &Sender<LogChT>,
+    enable_ss: bool,
+    orig: u8,
+) -> Result<BPAction, Error> {
     let sregs = &event.get_arch().sregs;
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
 
@@ -227,6 +231,8 @@ async fn handle_modify_(
     let name_rva = profile.get_struct_field_offset("_FILE_OBJECT", "FileName")?;
     let fname = memory::read_utf16(&v_space, file_obj_ptr + body_rva + name_rva).await?;
 
+    dom.resume_from_bp(orig, event, extra, enable_ss).await?;
+
     let mut message = capnp::message::Builder::new_default();
     {
         let mut event_log = message.init_root::<event::Builder>();
@@ -237,5 +243,7 @@ async fn handle_modify_(
         file.set_name(&fname);
         file.set_access(access);
     }
-    Ok(())
+
+    log_tx.send(message).await;
+    Ok(BPAction::None)
 }

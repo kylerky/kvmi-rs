@@ -13,16 +13,18 @@ use async_std::sync::Sender;
 
 use futures::future::{BoxFuture, FutureExt};
 
-use crate::collect::LogChT;
+use log::error;
 
-pub fn tcp_receive<'a>(
+use crate::collect::{BPAction, LogChT};
+
+pub(crate) fn tcp_receive<'a>(
     dom: &'a mut Domain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
     log_tx: &'a Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> BoxFuture<'a, Result<(), Error>> {
+) -> BoxFuture<'a, Result<BPAction, Error>> {
     tcp_receive_(dom, event, extra, log_tx, enable_ss, orig).boxed()
 }
 
@@ -33,7 +35,7 @@ async fn tcp_receive_(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<(), Error> {
+) -> Result<BPAction, Error> {
     let sregs = &event.get_arch().sregs;
     let (_, pid, proc_name) = super::get_process(dom, event, sregs).await?;
 
@@ -41,7 +43,12 @@ async fn tcp_receive_(
     let v_space = dom.get_k_vspace();
 
     let addr = match get_ip(v_space, regs).await {
-        Err(_) => return dom.resume_from_bp(orig, event, extra, enable_ss).await,
+        Err(e) => {
+            if let Err(err) = dom.resume_from_bp(orig, event, extra, enable_ss).await {
+                error!("Error resuming from bp: {}", err)
+            }
+            return Err(e);
+        }
         Ok(ip) => ip,
     };
     dom.resume_from_bp(orig, event, extra, enable_ss).await?;
@@ -58,7 +65,7 @@ async fn tcp_receive_(
     }
 
     log_tx.send(message).await;
-    Ok(())
+    Ok(BPAction::None)
 }
 
 async fn get_ip(v_space: &IA32eVirtual, regs: &kvm_regs) -> Result<Ipv4Addr, Error> {

@@ -1,8 +1,11 @@
 mod file;
-pub use file::*;
+pub(crate) use file::*;
 
 mod tcp;
-pub use tcp::*;
+pub(crate) use tcp::*;
+
+mod process;
+pub(crate) use process::*;
 
 use kvmi_semantic::address_space::*;
 use kvmi_semantic::event::*;
@@ -53,7 +56,7 @@ fn set_msg_proc(mut event_log: event::Builder, pid: u64, proc_name: &str) {
 type OutputItem = Result<(IA32eAddrT, BPHandler), Error>;
 type InputItem = (&'static str, BPHandler);
 
-pub fn get_bps<'a, T, O>(
+pub(crate) fn get_bps<'a, T, O>(
     kernel_base_va: IA32eAddrT,
     tcpip_base: IA32eAddrT,
     kernel_fns: T,
