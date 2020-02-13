@@ -135,8 +135,11 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
     use EventKind::*;
 
     if handler.bps.is_empty() {
-        let mut kernel_fns: Vec<(&str, BPHandler)> =
-            vec![("NtOpenFile", Box::new(bp_handlers::open_file))];
+        let mut kernel_fns: Vec<(&str, BPHandler)> = vec![
+            // ("NtOpenFile", Box::new(bp_handlers::open_file)),
+            ("NtWriteFile", Box::new(bp_handlers::write_file)),
+            ("NtReadFile", Box::new(bp_handlers::read_file)),
+        ];
         let mut tcp_fns: Vec<(&str, BPHandler)> = vec![(
             "TcpCreateAndConnectTcbComplete",
             Box::new(bp_handlers::tcp_receive),

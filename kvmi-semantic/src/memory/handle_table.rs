@@ -3,8 +3,6 @@ use crate::{Error, RekallProfile, Result, PAGE_SHIFT, PTR_SZ};
 
 use std::convert::TryInto;
 
-use log::debug;
-
 const PTR_SHIFT: u32 = PTR_SZ.trailing_zeros();
 const HANDLE_STEP: u32 = 4;
 const HANDLE_STEP_SHIFT: u32 = HANDLE_STEP.trailing_zeros();
@@ -25,8 +23,6 @@ pub async fn get_obj_by(
     let handle_entry_shift = handle_entry_sz.trailing_zeros();
 
     let (table_ptr, level) = get_handle_table_from(v_space, process, profile).await?;
-    debug!("table ptr: 0x{:x?}, level: {}", table_ptr, level);
-    debug!("handle: 0x{:x?}", handle);
 
     find_obj(v_space, table_ptr, handle, level, handle_entry_shift).await
 }

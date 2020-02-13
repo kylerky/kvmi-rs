@@ -17,6 +17,7 @@ use async_std::sync::Sender;
 
 use crate::collect::LogChT;
 
+#[allow(dead_code)]
 pub fn open_file<'a>(
     dom: &'a mut Domain,
     event: &'a Event,
@@ -25,10 +26,10 @@ pub fn open_file<'a>(
     enable_ss: bool,
     orig: u8,
 ) -> BoxFuture<'a, Result<(), Error>> {
-    _open_file(dom, event, extra, log_tx, enable_ss, orig).boxed()
+    open_file_(dom, event, extra, log_tx, enable_ss, orig).boxed()
 }
 
-async fn _open_file(
+async fn open_file_(
     dom: &mut Domain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
@@ -44,11 +45,8 @@ async fn _open_file(
             dom.resume_from_bp(orig, event, extra, enable_ss).await?;
             fname
         }
-        Err(Error::InvalidVAddr) => {
+        Err(Error::FromUtf16(_)) | Err(Error::InvalidVAddr) => {
             // debug!("Invalid virtual addr");
-            return dom.resume_from_bp(orig, event, extra, enable_ss).await;
-        }
-        Err(Error::FromUtf8(_)) => {
             return dom.resume_from_bp(orig, event, extra, enable_ss).await;
         }
         Err(e) => {
@@ -78,7 +76,7 @@ async fn get_file_info(
     dom: &mut Domain,
     event: &Event,
     sregs: &kvm_sregs,
-    _process: IA32eAddrT,
+    process: IA32eAddrT,
 ) -> Result<String, Error> {
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
     let profile = dom.get_profile();
@@ -99,16 +97,15 @@ async fn get_file_info(
     if fname_ptr == 0 || !IA32eVirtual::is_canonical(fname_ptr) {
         return Err(Error::InvalidVAddr);
     }
-    let fname = memory::read_utf8(&v_space, fname_ptr).await?;
+    let mut fname = memory::read_utf16(&v_space, fname_ptr).await?;
 
-    // if let Ok(dir) = get_root_dir(&v_space, process, *obj_attr_ptr, profile).await {
-    //     fname = format!("{}\\{}", dir, fname);
-    // }
+    if let Ok(dir) = get_root_dir(&v_space, process, *obj_attr_ptr, profile).await {
+        fname = format!("{}\\{}", dir, fname);
+    }
 
     Ok(fname)
 }
 
-#[allow(dead_code)]
 async fn get_root_dir(
     v_space: &IA32eVirtual,
     process: IA32eAddrT,
@@ -129,6 +126,116 @@ async fn get_root_dir(
     let root_dir_ptr = handle_table::get_obj_by(v_space, root_dir_handle, process, profile).await?;
     let body_rva = profile.get_struct_field_offset("_OBJECT_HEADER", "Body")?;
     let name_rva = profile.get_struct_field_offset("_FILE_OBJECT", "FileName")?;
-    let dir_name = memory::read_utf8(&v_space, root_dir_ptr + body_rva + name_rva).await?;
+    let dir_name = memory::read_utf16(&v_space, root_dir_ptr + body_rva + name_rva).await?;
     Ok(dir_name)
+}
+
+pub fn read_file<'a>(
+    dom: &'a mut Domain,
+    event: &'a Event,
+    extra: &'a KvmiEventBreakpoint,
+    log_tx: &'a Sender<LogChT>,
+    enable_ss: bool,
+    orig: u8,
+) -> BoxFuture<'a, Result<(), Error>> {
+    read_file_(dom, event, extra, log_tx, enable_ss, orig).boxed()
+}
+
+async fn read_file_(
+    dom: &mut Domain,
+    event: &Event,
+    extra: &KvmiEventBreakpoint,
+    log_tx: &Sender<LogChT>,
+    enable_ss: bool,
+    orig: u8,
+) -> Result<(), Error> {
+    handle_modify(dom, FileAccess::Read, event, extra, log_tx, enable_ss, orig).await
+}
+
+pub fn write_file<'a>(
+    dom: &'a mut Domain,
+    event: &'a Event,
+    extra: &'a KvmiEventBreakpoint,
+    log_tx: &'a Sender<LogChT>,
+    enable_ss: bool,
+    orig: u8,
+) -> BoxFuture<'a, Result<(), Error>> {
+    write_file_(dom, event, extra, log_tx, enable_ss, orig).boxed()
+}
+
+async fn write_file_(
+    dom: &mut Domain,
+    event: &Event,
+    extra: &KvmiEventBreakpoint,
+    log_tx: &Sender<LogChT>,
+    enable_ss: bool,
+    orig: u8,
+) -> Result<(), Error> {
+    handle_modify(
+        dom,
+        FileAccess::Write,
+        event,
+        extra,
+        log_tx,
+        enable_ss,
+        orig,
+    )
+    .await
+}
+
+async fn handle_modify(
+    dom: &mut Domain,
+    access: FileAccess,
+    event: &Event,
+    extra: &KvmiEventBreakpoint,
+    log_tx: &Sender<LogChT>,
+    enable_ss: bool,
+    orig: u8,
+) -> Result<(), Error> {
+    match handle_modify_(dom, access, event, extra, log_tx, enable_ss, orig).await {
+        Ok(()) | Err(Error::FromUtf16(_)) | Err(Error::InvalidVAddr) => {
+            dom.resume_from_bp(orig, event, extra, enable_ss).await
+        }
+        Err(e) => {
+            let _ = dom.resume_from_bp(orig, event, extra, enable_ss).await;
+            Err(e)
+        }
+    }
+}
+
+async fn handle_modify_(
+    dom: &mut Domain,
+    access: FileAccess,
+    event: &Event,
+    _extra: &KvmiEventBreakpoint,
+    _log_tx: &Sender<LogChT>,
+    _enable_ss: bool,
+    _orig: u8,
+) -> Result<(), Error> {
+    let sregs = &event.get_arch().sregs;
+    let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
+
+    let regs = &event.get_arch().regs;
+    let args = MSx64::new(&v_space, regs, 1).await?;
+    let handle = args.get(0).unwrap();
+
+    let (process, pid, proc_name) = super::get_process(dom, event, sregs).await?;
+    let profile = dom.get_profile();
+    let file_obj_ptr = handle_table::get_obj_by(&v_space, *handle, process, profile).await?;
+
+    let body_rva = profile.get_struct_field_offset("_OBJECT_HEADER", "Body")?;
+    let name_rva = profile.get_struct_field_offset("_FILE_OBJECT", "FileName")?;
+    let fname = memory::read_utf16(&v_space, file_obj_ptr + body_rva + name_rva).await?;
+
+    let mut message = capnp::message::Builder::new_default();
+    {
+        let mut event_log = message.init_root::<event::Builder>();
+        super::set_msg_proc(event_log.reborrow(), pid, &proc_name);
+
+        let detail = event_log.get_detail();
+        let mut file = detail.init_file();
+        file.set_name(&fname);
+        file.set_access(access);
+    }
+    Ok(())
 }

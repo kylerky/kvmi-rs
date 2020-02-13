@@ -23,10 +23,10 @@ pub fn tcp_receive<'a>(
     enable_ss: bool,
     orig: u8,
 ) -> BoxFuture<'a, Result<(), Error>> {
-    _tcp_receive(dom, event, extra, log_tx, enable_ss, orig).boxed()
+    tcp_receive_(dom, event, extra, log_tx, enable_ss, orig).boxed()
 }
 
-async fn _tcp_receive(
+async fn tcp_receive_(
     dom: &mut Domain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
