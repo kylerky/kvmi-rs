@@ -35,6 +35,7 @@ struct FileEvent {
 
 struct ForkEvent {
     pid @0 :UInt64;
+    procName @1 :Text;
 }
 
 enum TcpAccess {
