@@ -89,10 +89,7 @@ async fn get_file_info(
     }
 
     let fname_rva = profile.get_struct_field_offset("_OBJECT_ATTRIBUTES", "ObjectName")?;
-    let fname_ptr = v_space
-        .read(obj_attr_ptr + fname_rva, 8)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let fname_ptr = v_space.read(obj_attr_ptr + fname_rva, 8).await?;
     let fname_ptr = u64::from_ne_bytes(fname_ptr[..].try_into().unwrap());
     if fname_ptr == 0 || !IA32eVirtual::is_canonical(fname_ptr) {
         return Err(Error::InvalidVAddr);
@@ -114,10 +111,7 @@ async fn get_root_dir(
 ) -> Result<String, Error> {
     let root_dir_ptr_rva =
         profile.get_struct_field_offset("_OBJECT_ATTRIBUTES", "RootDirectory")?;
-    let root_dir_handle = v_space
-        .read(obj_attr_ptr + root_dir_ptr_rva, 8)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let root_dir_handle = v_space.read(obj_attr_ptr + root_dir_ptr_rva, 8).await?;
     let root_dir_handle = u64::from_ne_bytes(root_dir_handle[..].try_into().unwrap());
     if root_dir_handle == 0 {
         return Err(Error::InvalidVAddr);

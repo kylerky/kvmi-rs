@@ -144,10 +144,7 @@ async fn listen(mut opt: Opt) -> Result<(), io::Error> {
         let v_addr = dom.get_kernel_base_va() + profile.get_func_offset("NtOpenFile")?;
         let v_space = dom.get_k_vspace();
         let p_space = v_space.get_base();
-        let gpa = v_space
-            .lookup(v_addr)
-            .await?
-            .expect("Cannot translate address of NtOpenFile");
+        let gpa = v_space.lookup(v_addr).await?;
 
         dom.pause_vm().await?;
 
@@ -278,10 +275,7 @@ async fn get_pid(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<u
     let uid_rva = profile.get_struct_field_offset("_EPROCESS", "UniqueProcessId")?;
     let arch = event.get_arch();
     let process = dom.get_current_process(&arch.sregs).await?;
-    let pid = v_space
-        .read(process + uid_rva, 8)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let pid = v_space.read(process + uid_rva, 8).await?;
     let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
     Ok(pid)
 }
@@ -302,10 +296,7 @@ async fn get_file_info(
     }
 
     let fname_rva = profile.get_struct_field_offset("_OBJECT_ATTRIBUTES", "ObjectName")?;
-    let fname_ptr = v_space
-        .read(obj_attr_ptr + fname_rva, 8)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let fname_ptr = v_space.read(obj_attr_ptr + fname_rva, 8).await?;
     let fname_ptr = u64::from_ne_bytes(fname_ptr[..].try_into().unwrap());
     if fname_ptr == 0 || !IA32eVirtual::is_canonical(fname_ptr) {
         return Err(Error::InvalidVAddr);

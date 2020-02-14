@@ -55,10 +55,7 @@ async fn find_obj(
                 let mut idx = handle >> HANDLE_STEP_SHIFT;
                 idx &= mask;
                 let offset = idx << entry_shift;
-                let ptr = v_space
-                    .read(table_ptr + offset, PTR_SZ)
-                    .await?
-                    .ok_or(Error::InvalidVAddr)?;
+                let ptr = v_space.read(table_ptr + offset, PTR_SZ).await?;
                 let mut ptr = IA32eAddrT::from_ne_bytes(ptr[..].try_into().unwrap());
 
                 ptr = ptr >> OBJECT_PTR_RSHIFT << OBJECT_PTR_LSHIFT;
@@ -74,10 +71,7 @@ async fn find_obj(
         };
 
         // read the table ptr
-        let new_ptr = v_space
-            .read(table_ptr + offset, PTR_SZ)
-            .await?
-            .ok_or(Error::InvalidVAddr)?;
+        let new_ptr = v_space.read(table_ptr + offset, PTR_SZ).await?;
         let new_ptr = IA32eAddrT::from_ne_bytes(new_ptr[..].try_into().unwrap());
         // into the next level
         table_ptr = new_ptr;
@@ -93,16 +87,12 @@ async fn get_handle_table_from(
     let table_struct_rva = profile.get_struct_field_offset("_EPROCESS", "ObjectTable")?;
     let table_code_rva = profile.get_struct_field_offset("_HANDLE_TABLE", "TableCode")?;
 
-    let table_struct_ptr = v_space
-        .read(process + table_struct_rva, PTR_SZ)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let table_struct_ptr = v_space.read(process + table_struct_rva, PTR_SZ).await?;
     let table_struct_ptr = IA32eAddrT::from_ne_bytes(table_struct_ptr[..].try_into().unwrap());
 
     let table_code = v_space
         .read(table_struct_ptr + table_code_rva, PTR_SZ)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+        .await?;
     let table_code = IA32eAddrT::from_ne_bytes(table_code[..].try_into().unwrap());
     let level = table_code & LEVEL_MASK;
     let table_ptr = table_code & !LEVEL_MASK;

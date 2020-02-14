@@ -176,9 +176,13 @@ impl Domain {
         processes.recv().await;
         while let Some(process) = processes.recv().await {
             let process = process?;
-            if let Some(pid) = v_space.read(process + pid_rva, PTR_SZ).await? {
-                let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
-                debug!("process: 0x{:x?}, pid: 0x{:x?}", process, pid);
+            match v_space.read(process + pid_rva, PTR_SZ).await {
+                Ok(pid) => {
+                    let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
+                    debug!("process: 0x{:x?}, pid: 0x{:x?}", process, pid);
+                }
+                Err(Error::InvalidVAddr) => (),
+                Err(e) => return Err(e),
             }
         }
         Ok(())

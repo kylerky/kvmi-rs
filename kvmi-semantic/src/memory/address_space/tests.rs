@@ -85,7 +85,7 @@ async fn ia32e_translation_l2() {
     let v_space = IA32eVirtual::new(p_space, l4_ptbpt);
 
     let result = v_space.translate_v2p(v_addr).await.unwrap();
-    assert_eq!(Some((0x1_3bb6_5540, 2)), result);
+    assert_eq!((0x1_3bb6_5540, 2), result);
 }
 
 #[async_std::test]

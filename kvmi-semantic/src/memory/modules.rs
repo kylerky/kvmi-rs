@@ -16,7 +16,6 @@ pub async fn get_sys_module_list<'a, 'b>(
     let flink_rva = profile.get_struct_field_offset(LIST_ENTRY, FLINK)?;
 
     let head = k_vspace.read(kernel_base + head_ptr, PTR_SZ).await?;
-    let head = head.ok_or(Error::InvalidVAddr)?;
     let head = u64::from_ne_bytes(head[..].try_into().unwrap());
 
     let iter = ForwardIter::new(k_vspace, head, flink_rva);
@@ -37,12 +36,8 @@ pub async fn find_module(
         let name = super::read_utf16(k_vspace, module_ptr + name_rva).await?;
         if name == expect_name {
             let base = k_vspace.read(module_ptr + base_rva, PTR_SZ).await?;
-            return if let Some(base) = base {
-                let base = IA32eAddrT::from_ne_bytes(base[..].try_into().unwrap());
-                Ok(base)
-            } else {
-                Err(Error::InvalidVAddr)
-            };
+            let base = IA32eAddrT::from_ne_bytes(base[..].try_into().unwrap());
+            return Ok(base);
         }
     }
     Err(Error::NotFound(format!("module {}", expect_name)))

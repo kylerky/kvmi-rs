@@ -139,43 +139,31 @@ impl IA32eVirtual {
         &self.base
     }
 
-    pub async fn read(&self, v_addr: IA32eAddrT, sz: usize) -> Result<Option<Vec<u8>>> {
+    pub async fn read(&self, v_addr: IA32eAddrT, sz: usize) -> Result<Vec<u8>> {
         let p_addr = self.lookup(v_addr).await?;
-        if let Some(p_addr) = p_addr {
-            self.base.read(p_addr, sz).await.map(Some)
-        } else {
-            Ok(None)
-        }
+        self.base.read(p_addr, sz).await
     }
 
-    pub async fn write(&self, v_addr: IA32eAddrT, data: Vec<u8>) -> Result<Option<()>> {
+    pub async fn write(&self, v_addr: IA32eAddrT, data: Vec<u8>) -> Result<()> {
         let p_addr = self.lookup(v_addr).await?;
-        if let Some(p_addr) = p_addr {
-            self.base.write(p_addr, data).await.map(|_| Some(()))
-        } else {
-            Ok(None)
-        }
+        self.base.write(p_addr, data).await
     }
 
-    pub async fn lookup(&self, v_addr: IA32eAddrT) -> Result<Option<PhysicalAddrT>> {
+    pub async fn lookup(&self, v_addr: IA32eAddrT) -> Result<PhysicalAddrT> {
         if let Some((addr, level)) = self.cache.read().await.lookup(v_addr).await {
             let offset = level * 9 + 3;
             let mask = (!0) << offset;
             let res = (addr & mask) | (v_addr & (!mask));
-            return Ok(Some(res));
+            return Ok(res);
         }
-        match self.translate_v2p(v_addr).await? {
-            None => Ok(None),
-            Some((p_addr, level)) => {
-                let offset = level * 9 + 3;
-                let mask = (!0) << offset;
-                self.cache
-                    .write()
-                    .await
-                    .insert(v_addr, level, p_addr & mask);
-                Ok(Some(p_addr))
-            }
-        }
+        let (p_addr, level) = self.translate_v2p(v_addr).await?;
+        let offset = level * 9 + 3;
+        let mask = (!0) << offset;
+        self.cache
+            .write()
+            .await
+            .insert(v_addr, level, p_addr & mask);
+        Ok(p_addr)
     }
 
     pub fn is_canonical(v_addr: IA32eAddrT) -> bool {
@@ -189,10 +177,10 @@ impl IA32eVirtual {
         self.cache.write().await.flush()
     }
 
-    async fn translate_v2p(&self, v_addr: IA32eAddrT) -> Result<Option<(PhysicalAddrT, u32)>> {
+    async fn translate_v2p(&self, v_addr: IA32eAddrT) -> Result<(PhysicalAddrT, u32)> {
         let mut base = self.ptb;
         let mut level: u32 = 4;
-        let result = loop {
+        loop {
             let offset = level * 9;
             // table lookup
             let v_addr_shift = (v_addr >> offset) & VA_MASK;
@@ -204,19 +192,18 @@ impl IA32eVirtual {
             // check entry
             let (paddr, pg, present) = Self::read_entry(entry);
             if !present {
-                break None;
+                return Err(Error::InvalidVAddr);
             }
 
             // add offset in a page frame
             if pg || level == 1 {
                 let mask = (!0) << (offset + 3);
                 let addr = (paddr & mask) | (v_addr & !mask);
-                break Some((addr, level));
+                return Ok((addr, level));
             }
             level -= 1;
             base = paddr;
-        };
-        Ok(result)
+        }
     }
 
     // Returns (gpa, PG, present)

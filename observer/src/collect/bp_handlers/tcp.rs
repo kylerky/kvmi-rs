@@ -73,22 +73,13 @@ async fn get_ip(v_space: &IA32eVirtual, regs: &kvm_regs) -> Result<Ipv4Addr, Err
 
     let p_tcp_end = args.get(0).unwrap();
 
-    let p_addr_info = v_space
-        .read(p_tcp_end + 0x18, 8)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let p_addr_info = v_space.read(p_tcp_end + 0x18, 8).await?;
     let p_addr_info = u64::from_ne_bytes(p_addr_info[..].try_into().unwrap());
 
-    let p_remote_ip = v_space
-        .read(p_addr_info + 0x10, 8)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let p_remote_ip = v_space.read(p_addr_info + 0x10, 8).await?;
     let p_remote_ip = u64::from_ne_bytes(p_remote_ip[..].try_into().unwrap());
 
-    let remote_ip = v_space
-        .read(p_remote_ip, 4)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let remote_ip = v_space.read(p_remote_ip, 4).await?;
     let remote_ip: [u8; 4] = remote_ip[..].try_into().unwrap();
     let addr = Ipv4Addr::from(remote_ip);
 

@@ -173,7 +173,7 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
         .collect::<Result<Vec<(IA32eAddrT, BPHandler)>, Error>>()?;
         for (v_addr, func) in bps {
             let v_space = handler.dom.get_k_vspace();
-            let gpa = v_space.lookup(v_addr).await?.ok_or(Error::InvalidVAddr)?;
+            let gpa = v_space.lookup(v_addr).await?;
             handler.set_bp_by_physical(gpa, func).await?;
         }
         debug!("bps: {:#x?}", handler.bps.keys());

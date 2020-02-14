@@ -28,17 +28,11 @@ async fn get_process(
     let uid_rva = profile.get_struct_field_offset("_EPROCESS", "UniqueProcessId")?;
     let arch = event.get_arch();
     let process = dom.get_current_process(&arch.sregs).await?;
-    let pid = v_space
-        .read(process + uid_rva, 8)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let pid = v_space.read(process + uid_rva, 8).await?;
     let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
 
     let image_name_rva = profile.get_struct_field_offset("_EPROCESS", "ImageFileName")?;
-    let image_name = v_space
-        .read(process + image_name_rva, 15)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let image_name = v_space.read(process + image_name_rva, 15).await?;
     let name_len = image_name
         .iter()
         .position(|&c| c == b'\0')

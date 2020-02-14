@@ -36,11 +36,11 @@ async fn read_kptr(
     symbol: &str,
     kernel_base_va: u64,
     profile: &RekallProfile,
-) -> Result<Option<u64>> {
+) -> Result<u64> {
     let ptr_rva = crate::get_symbol_offset(profile, symbol)?;
 
     let data = addr_space.read(kernel_base_va + ptr_rva, PTR_SZ).await?;
-    Ok(data.map(|d| u64::from_ne_bytes(d[..].try_into().unwrap())))
+    Ok(u64::from_ne_bytes(data[..].try_into().unwrap()))
 }
 
 pub(super) async fn get_system_page_table(
@@ -54,10 +54,14 @@ pub(super) async fn get_system_page_table(
     let name_rva = crate::get_struct_field_offset(profile, EPROCESS, "ImageFileName")?;
 
     debug!("trying to get page table base from PsInitialSystemProcess");
-    let ptb = process::by_ps_init_sys(v_space, kernel_base_va, profile, dtb_rva).await?;
-    if let Some(ptb) = ptb {
-        v_space.set_ptb(ptb);
-        return Ok(true);
+    let ptb = process::by_ps_init_sys(v_space, kernel_base_va, profile, dtb_rva).await;
+    match ptb {
+        Ok(ptb) => {
+            v_space.set_ptb(ptb);
+            return Ok(true);
+        }
+        Err(Error::InvalidVAddr) => (),
+        Err(e) => return Err(e),
     }
 
     debug!("trying to get page table base from process list");
@@ -70,11 +74,15 @@ pub(super) async fn get_system_page_table(
             process_head,
             profile,
         )
-        .await??
+        .await?
     };
-    if let Some(ptb) = ptb {
-        v_space.set_ptb(ptb);
-        return Ok(true);
+    match ptb {
+        Ok(ptb) => {
+            v_space.set_ptb(ptb);
+            return Ok(true);
+        }
+        Err(Error::InvalidVAddr) => (),
+        Err(e) => return Err(e),
     }
 
     debug!("trying to get page table base by scanning");
@@ -93,12 +101,14 @@ pub(super) async fn get_system_page_table(
         flink_rva,
         blink_rva,
     )
-    .await?;
-    if let Some(ptb) = ptb {
-        v_space.set_ptb(ptb);
-        Ok(true)
-    } else {
-        Ok(false)
+    .await;
+    match ptb {
+        Ok(ptb) => {
+            v_space.set_ptb(ptb);
+            Ok(true)
+        }
+        Err(Error::InvalidVAddr) => Ok(false),
+        Err(e) => Err(e),
     }
 }
 
@@ -111,7 +121,7 @@ pub(super) async fn by_physical_mem_scan(
     dtb_rva: u64,
     flink_rva: u64,
     blink_rva: u64,
-) -> Result<Option<u64>> {
+) -> Result<u64> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"(?-u)System\x00").unwrap();
     }
@@ -177,12 +187,12 @@ pub(super) async fn by_physical_mem_scan(
                 debug!("dtb: 0x{:x?} filtered by thread list reflection test", dtb);
                 continue;
             }
-            return Ok(Some(dtb));
+            return Ok(dtb);
         }
 
         prev_page = page;
     }
-    Ok(None)
+    Err(Error::InvalidVAddr)
 }
 
 async fn verify_by_user_shared(
@@ -191,23 +201,27 @@ async fn verify_by_user_shared(
     minor_rva: u64,
 ) -> Result<bool> {
     debug!("verifying by user shared");
+    match get_major_minor(addr_space, major_rva, minor_rva).await {
+        Ok((10, 0)) => Ok(true),
+        Ok(_) | Err(Error::InvalidVAddr) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+async fn get_major_minor(
+    addr_space: &IA32eVirtual,
+    major_rva: u64,
+    minor_rva: u64,
+) -> Result<(u32, u32)> {
     let major = addr_space
         .read(KI_USER_SHARED_DATA_PTR + major_rva, LLP64_ULONG_SZ)
         .await?;
     let minor = addr_space
         .read(KI_USER_SHARED_DATA_PTR + minor_rva, LLP64_ULONG_SZ)
         .await?;
-    match (major, minor) {
-        (Some(major), Some(minor)) => {
-            let major = u32::from_ne_bytes(major[..].try_into().unwrap());
-            let minor = u32::from_ne_bytes(minor[..].try_into().unwrap());
-            match (major, minor) {
-                (10, 0) => Ok(true),
-                _ => Ok(false),
-            }
-        }
-        _ => Ok(false),
-    }
+    let major = u32::from_ne_bytes(major[..].try_into().unwrap());
+    let minor = u32::from_ne_bytes(minor[..].try_into().unwrap());
+    Ok((major, minor))
 }
 
 async fn verify_by_thread_list(
@@ -217,18 +231,22 @@ async fn verify_by_thread_list(
     blink_rva: u64,
 ) -> Result<bool> {
     debug!("verifying by thread list");
-    let blink = addr_space.read(flink + blink_rva, PTR_SZ).await?;
-    if let Some(blink) = blink {
-        let blink = u64::from_ne_bytes(blink[..].try_into().unwrap());
+    let blink = match addr_space.read(flink + blink_rva, PTR_SZ).await {
+        Ok(r) => r,
+        Err(Error::InvalidVAddr) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let blink = u64::from_ne_bytes(blink[..].try_into().unwrap());
 
-        let flink_test = addr_space.read(blink + flink_rva, PTR_SZ).await?;
-        if let Some(flink_test) = flink_test {
-            let flink_test = u64::from_ne_bytes(flink_test[..].try_into().unwrap());
-            let passed = flink == flink_test;
-            return Ok(passed);
-        }
-    }
-    Ok(false)
+    let flink_test = match addr_space.read(blink + flink_rva, PTR_SZ).await {
+        Ok(r) => r,
+        Err(Error::InvalidVAddr) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let flink_test = u64::from_ne_bytes(flink_test[..].try_into().unwrap());
+
+    let passed = flink == flink_test;
+    Ok(passed)
 }
 
 fn get_kernel_va_from(msrs: &HashMap<u32, u64>, profile: &RekallProfile) -> Result<u64> {
@@ -282,45 +300,37 @@ pub(super) async fn find_kernel_addr(
     let pt_base = cr3 & CR3_MASK;
     let v_space = IA32eVirtual::new(p_space, pt_base);
 
-    let kernel_base_pa = v_space.lookup(kernel_base_va).await?;
+    let kernel_base_pa = v_space.lookup(kernel_base_va).await;
 
-    let kernel_base_pa = kernel_base_pa.ok_or(Error::KernelPAddr)?;
+    let kernel_base_pa = kernel_base_pa.map_err(|e| match e {
+        Error::InvalidVAddr => Error::KernelPAddr,
+        err => err,
+    })?;
     info!("kernel base physical address: 0x{:x?}", kernel_base_pa);
 
     Ok((kernel_base_va, kernel_base_pa, v_space))
 }
 
 pub async fn read_utf8(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
-    let str_struct = v_space
-        .read(addr, UNICODE_STRING_SZ)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let str_struct = v_space.read(addr, UNICODE_STRING_SZ).await?;
 
     let length = u16::from_ne_bytes(str_struct[..2].try_into().unwrap());
     let buffer_ptr = IA32eAddrT::from_ne_bytes(str_struct[8..].try_into().unwrap());
 
-    let buffer = v_space
-        .read(buffer_ptr, length as usize)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let buffer = v_space.read(buffer_ptr, length as usize).await?;
     let res = String::from_utf8(buffer)?;
 
     Ok(res)
 }
 
 pub async fn read_utf16(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
-    let str_struct = v_space
-        .read(addr, UNICODE_STRING_SZ)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let str_struct = v_space.read(addr, UNICODE_STRING_SZ).await?;
 
     let length = u16::from_ne_bytes(str_struct[..2].try_into().unwrap());
     let buffer_ptr = IA32eAddrT::from_ne_bytes(str_struct[8..].try_into().unwrap());
 
-    let buffer = v_space
-        .read(buffer_ptr, length as usize)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let buffer = v_space.read(buffer_ptr, length as usize).await?;
+
     let buffer: Vec<u16> = buffer
         .chunks_exact(2)
         .map(|bytes| u16::from_ne_bytes(bytes.try_into().unwrap()))

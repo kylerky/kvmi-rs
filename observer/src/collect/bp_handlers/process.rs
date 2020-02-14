@@ -57,11 +57,10 @@ async fn fork_set_ret_trap(
     let regs = &arch.regs;
     let ret_addr = v_space
         .read(regs.rsp, PTR_SZ)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+        .await?;
     let ret_addr = IA32eAddrT::from_ne_bytes(ret_addr[..].try_into().unwrap());
 
-    let gpa = v_space.lookup(ret_addr).await?.ok_or(Error::InvalidVAddr)?;
+    let gpa = v_space.lookup(ret_addr).await?;
     let p_space = v_space.get_base();
     let ret_orig = p_space.read(gpa, 1).await?[0];
     dom.set_bp_by_physical(gpa).await?;
@@ -127,8 +126,7 @@ async fn fork_ret_get_new(
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
     let proc_handle = v_space
         .read(proc_handle_ptr, PTR_SZ)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+        .await?;
     let proc_handle = IA32eAddrT::from_ne_bytes(proc_handle[..].try_into().unwrap());
 
     let profile = dom.get_profile();
@@ -138,8 +136,7 @@ async fn fork_ret_get_new(
     let image_name_rva = profile.get_struct_field_offset("_EPROCESS", "ImageFileName")?;
     let image_name = v_space
         .read(eprocess_ptr + body_rva + image_name_rva, 15)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+        .await?;
     let name_len = image_name
         .iter()
         .position(|&c| c == b'\0')

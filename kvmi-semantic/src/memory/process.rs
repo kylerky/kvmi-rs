@@ -26,17 +26,13 @@ pub(crate) async fn by_ps_init_sys(
     kernel_base_va: u64,
     profile: &RekallProfile,
     dtb_rva: u64,
-) -> Result<Option<u64>> {
-    if let Some(proc_va) =
-        super::read_kptr(v_space, "PsInitialSystemProcess", kernel_base_va, profile).await?
-    {
-        debug!("System virtual address: 0x{:x?}", proc_va);
-        if let Some(page_table_ptr) = v_space.read(proc_va + dtb_rva, PTR_SZ).await? {
-            let page_table_ptr = u64::from_ne_bytes(page_table_ptr[..].try_into().unwrap());
-            return Ok(Some(page_table_ptr & CR3_MASK));
-        }
-    }
-    Ok(None)
+) -> Result<u64> {
+    let proc_va =
+        super::read_kptr(v_space, "PsInitialSystemProcess", kernel_base_va, profile).await?;
+    debug!("System virtual address: 0x{:x?}", proc_va);
+    let page_table_ptr = v_space.read(proc_va + dtb_rva, PTR_SZ).await?;
+    let page_table_ptr = u64::from_ne_bytes(page_table_ptr[..].try_into().unwrap());
+    Ok(page_table_ptr & CR3_MASK)
 }
 
 pub(crate) async fn process_list_traversal<F, FR>(
@@ -64,27 +60,38 @@ pub async fn by_eprocess_list_traversal(
     processes: Receiver<PSChanT>,
     profile: &RekallProfile,
     dtb_rva: u64,
-) -> Result<Option<u64>> {
+) -> Result<u64> {
     let pid_rva = crate::get_struct_field_offset(profile, EPROCESS, "UniqueProcessId")?;
     // skip the list head
     processes.recv().await;
     while let Some(process) = processes.recv().await {
         let process = process?;
-        if let Some(pid) = v_space.read(process + pid_rva, PTR_SZ).await? {
-            let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
-            if pid == SYSTEM_PID {
-                let dtb = v_space.read(process + dtb_rva, PTR_SZ).await?;
-                if let Some(dtb) = dtb {
-                    let dtb = u64::from_ne_bytes(dtb[..].try_into().unwrap());
-                    // sanity check of dtb
-                    if dtb > 0 {
-                        return Ok(Some(dtb & CR3_MASK));
-                    }
-                }
-            }
+        match eprocess_validate(v_space, process, pid_rva, dtb_rva).await {
+            Ok(dtb) => return Ok(dtb),
+            Err(Error::InvalidVAddr) => continue,
+            Err(e) => return Err(e),
         }
     }
-    Ok(None)
+    Err(Error::InvalidVAddr)
+}
+
+async fn eprocess_validate(
+    v_space: &IA32eVirtual,
+    process: IA32eAddrT,
+    pid_rva: u64,
+    dtb_rva: u64,
+) -> Result<u64> {
+    let pid = v_space.read(process + pid_rva, PTR_SZ).await?;
+    let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
+    if pid == SYSTEM_PID {
+        let dtb = v_space.read(process + dtb_rva, PTR_SZ).await?;
+        let dtb = u64::from_ne_bytes(dtb[..].try_into().unwrap());
+        // sanity check of dtb
+        if dtb > 0 {
+            return Ok(dtb & CR3_MASK);
+        }
+    }
+    Err(Error::InvalidVAddr)
 }
 
 pub fn get_process_list_from(
@@ -129,8 +136,8 @@ pub async fn traverse_process_list(
     while let Some(link) = processes.pop() {
         tx.send(Ok(link - links_rva)).await;
         let links = match v_space.read(link, PTR_SZ * 2).await {
-            Ok(Some(l)) => l,
-            Ok(None) => continue,
+            Ok(l) => l,
+            Err(Error::InvalidVAddr) => continue,
             Err(e) => {
                 tx.send(Err(e)).await;
                 break;
@@ -160,10 +167,7 @@ pub async fn get_current_process(
     let process_rva = crate::get_struct_field_offset(profile, "_KTHREAD", "Process")?;
 
     let thread_ptr = get_current_thread(v_space, sregs, profile).await?;
-    let process_ptr = v_space
-        .read(thread_ptr + process_rva, PTR_SZ)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+    let process_ptr = v_space.read(thread_ptr + process_rva, PTR_SZ).await?;
     let process_ptr = u64::from_ne_bytes(process_ptr[..].try_into().unwrap());
 
     Ok(process_ptr)
@@ -180,8 +184,7 @@ pub async fn get_current_thread(
     let gs_base = sregs.gs.base;
     let thread_ptr = v_space
         .read(gs_base + prcb_rva + curr_thread_rva, PTR_SZ)
-        .await?
-        .ok_or(Error::InvalidVAddr)?;
+        .await?;
     let thread_ptr = u64::from_ne_bytes(thread_ptr[..].try_into().unwrap());
 
     Ok(thread_ptr)

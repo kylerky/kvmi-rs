@@ -13,7 +13,7 @@ use futures::future::BoxFuture;
 pub struct ForwardIter<'a> {
     v_space: &'a IA32eVirtual,
     flink_rva: IA32eAddrT,
-    inner: BoxFuture<'a, Result<Option<Vec<u8>>>>,
+    inner: BoxFuture<'a, Result<Vec<u8>>>,
 }
 
 impl<'a> ForwardIter<'a> {
@@ -34,12 +34,12 @@ impl<'a> Stream for ForwardIter<'a> {
         use Poll::*;
         match Pin::new(&mut self.inner).poll(cx) {
             Pending => Pending,
-            Ready(Ok(Some(curr))) => {
+            Ready(Ok(curr)) => {
                 let curr = u64::from_ne_bytes(curr[..].try_into().unwrap());
                 self.inner = Box::pin(self.v_space.read(curr + self.flink_rva, PTR_SZ));
                 Ready(Some(curr))
             }
-            Ready(Err(_)) | Ready(Ok(None)) => Ready(None),
+            Ready(Err(_)) => Ready(None),
         }
     }
 }

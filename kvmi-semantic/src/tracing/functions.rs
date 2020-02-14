@@ -1,6 +1,6 @@
 use crate::event::kvm_regs;
 use crate::memory::address_space::*;
-use crate::{Error, Result, PTR_SZ};
+use crate::{Result, PTR_SZ};
 
 use std::convert::TryInto;
 
@@ -16,8 +16,7 @@ impl<'a> MSx64<'a> {
             let start_offset = ((Self::REGS_NUM + 1) * PTR_SZ) as u64;
             let args_bytes = v_space
                 .read(rsp + start_offset, (num - Self::REGS_NUM) * PTR_SZ)
-                .await?
-                .ok_or(Error::InvalidVAddr)?;
+                .await?;
             let stack_args: Vec<u64> = args_bytes[..]
                 .chunks(PTR_SZ)
                 .map(|bytes| u64::from_ne_bytes(bytes.try_into().unwrap()))
