@@ -12,12 +12,13 @@ interface Consumer(T) {
 
 struct Event {
     pid @0 :UInt64;
-    procName @1 :Text;
+    ppid @1 :UInt64;
+    procName @2 :Text;
 
     detail :union {
-        file @2 :FileEvent;
-        fork @3 :ForkEvent;
-        tcp @4 :TcpEvent;
+        file @3 :FileEvent;
+        fork @4 :ForkEvent;
+        tcp @5 :TcpEvent;
     }
 }
 

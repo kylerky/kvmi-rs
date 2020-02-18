@@ -15,7 +15,7 @@ use futures::future::{BoxFuture, FutureExt};
 
 use log::error;
 
-use crate::collect::{BPAction, LogChT};
+use crate::collect::LogChT;
 
 pub(crate) fn tcp_receive<'a>(
     dom: &'a mut Domain,
@@ -24,7 +24,7 @@ pub(crate) fn tcp_receive<'a>(
     log_tx: &'a Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> BoxFuture<'a, Result<BPAction, Error>> {
+) -> BoxFuture<'a, Result<(), Error>> {
     tcp_receive_(dom, event, extra, log_tx, enable_ss, orig).boxed()
 }
 
@@ -35,9 +35,9 @@ async fn tcp_receive_(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<BPAction, Error> {
+) -> Result<(), Error> {
     let sregs = &event.get_arch().sregs;
-    let (_, pid, proc_name) = super::get_process(dom, event, sregs).await?;
+    let (_, pid, ppid, proc_name) = super::get_process(dom, event, sregs).await?;
 
     let regs = &event.get_arch().regs;
     let v_space = dom.get_k_vspace();
@@ -56,7 +56,7 @@ async fn tcp_receive_(
     let mut message = capnp::message::Builder::new_default();
     {
         let mut event_log = message.init_root::<event::Builder>();
-        super::set_msg_proc(event_log.reborrow(), pid, &proc_name);
+        super::set_msg_proc(event_log.reborrow(), pid, ppid, &proc_name);
 
         let detail = event_log.get_detail();
         let mut tcp = detail.init_tcp();
@@ -65,7 +65,7 @@ async fn tcp_receive_(
     }
 
     log_tx.send(message).await;
-    Ok(BPAction::None)
+    Ok(())
 }
 
 async fn get_ip(v_space: &IA32eVirtual, regs: &kvm_regs) -> Result<Ipv4Addr, Error> {

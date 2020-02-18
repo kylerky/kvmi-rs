@@ -23,13 +23,6 @@ use futures::future::BoxFuture;
 
 const CPL_MASK: u16 = 3;
 const TCPIP_SYS: &str = "tcpip.sys";
-const PTR_SZ: usize = 8;
-
-pub(crate) enum BPAction {
-    None,
-    Add((PhysicalAddrT, (u8, BPHandler))),
-    Remove(PhysicalAddrT),
-}
 
 type BPHandler = Box<
     dyn for<'a> Fn(
@@ -39,7 +32,7 @@ type BPHandler = Box<
             &'a Sender<LogChT>,
             bool,
             u8,
-        ) -> BoxFuture<'a, Result<BPAction, Error>>
+        ) -> BoxFuture<'a, Result<(), Error>>
         + Sync
         + Send,
 >;
@@ -146,7 +139,6 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
             // ("NtOpenFile", Box::new(bp_handlers::open_file)),
             ("NtWriteFile", Box::new(bp_handlers::write_file)),
             ("NtReadFile", Box::new(bp_handlers::read_file)),
-            ("NtCreateUserProcess", Box::new(bp_handlers::fork)),
         ];
         let mut tcp_fns: Vec<(&str, BPHandler)> = vec![(
             "TcpCreateAndConnectTcbComplete",
@@ -212,15 +204,7 @@ async fn handle_bp(
     }
 
     handler.vcpu_gpa.insert(event.get_vcpu(), extra.get_gpa());
-    match bp_handler(dom, event, extra, &handler.log_tx, enable_ss, orig).await? {
-        BPAction::Add((gpa, (orig, bp_handler))) => {
-            handler.bps.insert(gpa, (orig, bp_handler));
-        }
-        BPAction::Remove(gpa) => {
-            handler.bps.remove(&gpa);
-        }
-        _ => (),
-    }
+    bp_handler(dom, event, extra, &handler.log_tx, enable_ss, orig).await?;
     Ok(())
 }
 

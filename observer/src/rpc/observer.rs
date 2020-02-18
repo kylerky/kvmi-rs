@@ -43,8 +43,9 @@ impl consumer::Server<event::Owned> for Consumer {
         Promise::from_future(async move {
             let event = params.get()?.get_event()?;
             println!(
-                "event pushed: {}, {}",
+                "event pushed: {}, {}, {}",
                 event.get_pid(),
+                event.get_ppid(),
                 event.get_proc_name()?
             );
             Ok(())

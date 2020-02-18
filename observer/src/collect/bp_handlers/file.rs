@@ -15,7 +15,7 @@ use log::error;
 
 use async_std::sync::Sender;
 
-use crate::collect::{BPAction, LogChT};
+use crate::collect::LogChT;
 
 #[allow(dead_code)]
 pub(crate) fn open_file<'a>(
@@ -25,7 +25,7 @@ pub(crate) fn open_file<'a>(
     log_tx: &'a Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> BoxFuture<'a, Result<BPAction, Error>> {
+) -> BoxFuture<'a, Result<(), Error>> {
     open_file_(dom, event, extra, log_tx, enable_ss, orig).boxed()
 }
 
@@ -36,9 +36,9 @@ async fn open_file_(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<BPAction, Error> {
+) -> Result<(), Error> {
     let sregs = &event.get_arch().sregs;
-    let (process, pid, proc_name) = super::get_process(dom, event, sregs).await?;
+    let (process, pid, ppid, proc_name) = super::get_process(dom, event, sregs).await?;
 
     let fname = match get_file_info(dom, event, sregs, process).await {
         Ok(fname) => {
@@ -47,7 +47,7 @@ async fn open_file_(
         }
         Err(Error::FromUtf16(_)) | Err(Error::InvalidVAddr) => {
             dom.resume_from_bp(orig, event, extra, enable_ss).await?;
-            return Ok(BPAction::None);
+            return Ok(());
         }
         Err(e) => {
             if let Err(err) = dom.resume_from_bp(orig, event, extra, false).await {
@@ -60,7 +60,7 @@ async fn open_file_(
     let mut message = capnp::message::Builder::new_default();
     {
         let mut event_log = message.init_root::<event::Builder>();
-        super::set_msg_proc(event_log.reborrow(), pid, &proc_name);
+        super::set_msg_proc(event_log.reborrow(), pid, ppid, &proc_name);
 
         let detail = event_log.get_detail();
         let mut file = detail.init_file();
@@ -69,7 +69,7 @@ async fn open_file_(
     }
 
     log_tx.send(message).await;
-    Ok(BPAction::None)
+    Ok(())
 }
 
 async fn get_file_info(
@@ -131,7 +131,7 @@ pub(crate) fn read_file<'a>(
     log_tx: &'a Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> BoxFuture<'a, Result<BPAction, Error>> {
+) -> BoxFuture<'a, Result<(), Error>> {
     read_file_(dom, event, extra, log_tx, enable_ss, orig).boxed()
 }
 
@@ -142,7 +142,7 @@ async fn read_file_(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<BPAction, Error> {
+) -> Result<(), Error> {
     handle_modify(dom, FileAccess::Read, event, extra, log_tx, enable_ss, orig).await
 }
 
@@ -153,7 +153,7 @@ pub(crate) fn write_file<'a>(
     log_tx: &'a Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> BoxFuture<'a, Result<BPAction, Error>> {
+) -> BoxFuture<'a, Result<(), Error>> {
     write_file_(dom, event, extra, log_tx, enable_ss, orig).boxed()
 }
 
@@ -164,7 +164,7 @@ async fn write_file_(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<BPAction, Error> {
+) -> Result<(), Error> {
     handle_modify(
         dom,
         FileAccess::Write,
@@ -185,12 +185,12 @@ async fn handle_modify(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<BPAction, Error> {
+) -> Result<(), Error> {
     match handle_modify_(dom, access, event, extra, log_tx, enable_ss, orig).await {
         Ok(r) => Ok(r),
         Err(Error::FromUtf16(_)) | Err(Error::InvalidVAddr) => {
             dom.resume_from_bp(orig, event, extra, enable_ss).await?;
-            Ok(BPAction::None)
+            Ok(())
         }
         Err(e) => {
             if let Err(err) = dom.resume_from_bp(orig, event, extra, enable_ss).await {
@@ -209,7 +209,7 @@ async fn handle_modify_(
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
-) -> Result<BPAction, Error> {
+) -> Result<(), Error> {
     let sregs = &event.get_arch().sregs;
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
 
@@ -217,7 +217,7 @@ async fn handle_modify_(
     let args = MSx64::new(&v_space, regs, 1).await?;
     let handle = args.get(0).unwrap();
 
-    let (process, pid, proc_name) = super::get_process(dom, event, sregs).await?;
+    let (process, pid, ppid, proc_name) = super::get_process(dom, event, sregs).await?;
     let profile = dom.get_profile();
     let file_obj_ptr = handle_table::get_obj_by(&v_space, *handle, process, profile).await?;
 
@@ -230,7 +230,7 @@ async fn handle_modify_(
     let mut message = capnp::message::Builder::new_default();
     {
         let mut event_log = message.init_root::<event::Builder>();
-        super::set_msg_proc(event_log.reborrow(), pid, &proc_name);
+        super::set_msg_proc(event_log.reborrow(), pid, ppid, &proc_name);
 
         let detail = event_log.get_detail();
         let mut file = detail.init_file();
@@ -239,5 +239,5 @@ async fn handle_modify_(
     }
 
     log_tx.send(message).await;
-    Ok(BPAction::None)
+    Ok(())
 }
