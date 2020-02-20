@@ -6,20 +6,23 @@ pub(crate) use tcp::*;
 
 use kvmi_semantic::address_space::*;
 use kvmi_semantic::event::*;
+use kvmi_semantic::memory;
 use kvmi_semantic::{Domain, Error, RekallProfile};
 
 use crate::kvmi_capnp::event;
 
 use std::convert::TryInto;
+use std::time::SystemTime;
 
 use super::BPHandler;
 
 async fn get_process(
     dom: &mut Domain,
     event: &Event,
-    sregs: &kvm_sregs,
+    _sregs: &kvm_sregs,
 ) -> Result<(IA32eAddrT, u64, u64, String), Error> {
-    let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
+    // let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
+    let v_space = dom.get_k_vspace();
     let profile = dom.get_profile();
 
     let arch = event.get_arch();
@@ -33,21 +36,30 @@ async fn get_process(
     let ppid = v_space.read(process + ppid_rva, 8).await?;
     let ppid = u64::from_ne_bytes(ppid[..].try_into().unwrap());
 
-    let image_name_rva = profile.get_struct_field_offset("_EPROCESS", "ImageFileName")?;
-    let image_name = v_space.read(process + image_name_rva, 15).await?;
-    let name_len = image_name
-        .iter()
-        .position(|&c| c == b'\0')
-        .unwrap_or_else(|| image_name.len());
-    let proc_name = String::from_utf8(image_name[..name_len].to_vec())?;
+    let image_file_ptr_rva = profile.get_struct_field_offset("_EPROCESS", "ImageFilePointer")?;
+    let image_file_ptr = v_space.read(process + image_file_ptr_rva, 8).await?;
+    let image_file_ptr = IA32eAddrT::from_ne_bytes(image_file_ptr[..].try_into().unwrap());
 
-    Ok((process, pid, ppid, proc_name))
+    let proc_file = if image_file_ptr != 0 {
+        let name_rva = profile.get_struct_field_offset("_FILE_OBJECT", "FileName")?;
+        memory::read_utf16(&v_space, image_file_ptr + name_rva).await?
+    } else {
+        String::new()
+    };
+
+    Ok((process, pid, ppid, proc_file))
 }
 
-fn set_msg_proc(mut event_log: event::Builder, pid: u64, ppid: u64, proc_name: &str) {
+fn set_msg_proc(mut event_log: event::Builder, pid: u64, ppid: u64, proc_file: &str) {
     event_log.set_pid(pid);
     event_log.set_ppid(ppid);
-    event_log.set_proc_name(proc_name);
+    event_log.set_proc_file(proc_file);
+    event_log.set_time_stamp(
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_micros() as u64,
+    );
 }
 
 type OutputItem = Result<(IA32eAddrT, BPHandler), Error>;

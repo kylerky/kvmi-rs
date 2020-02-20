@@ -187,7 +187,7 @@ async fn handle_modify(
     orig: u8,
 ) -> Result<(), Error> {
     match handle_modify_(dom, access, event, extra, log_tx, enable_ss, orig).await {
-        Ok(r) => Ok(r),
+        Ok(()) => Ok(()),
         Err(Error::FromUtf16(_)) | Err(Error::InvalidVAddr) => {
             dom.resume_from_bp(orig, event, extra, enable_ss).await?;
             Ok(())

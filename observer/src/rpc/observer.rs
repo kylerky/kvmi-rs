@@ -5,12 +5,18 @@ use futures::select;
 use futures::AsyncReadExt;
 use futures::FutureExt;
 
+use async_std::sync::Sender;
+
+use crate::kvmi_capnp::event::detail::{File, Fork, Tcp};
+use crate::kvmi_capnp::FileAccess;
 use capnp::capability::Promise;
 use capnp_rpc::rpc_twoparty_capnp::Side;
 use capnp_rpc::twoparty::{VatId, VatNetwork};
 use capnp_rpc::RpcSystem;
 
 use crate::kvmi_capnp::{consumer, event, publisher, subscription};
+
+use crate::graph::{self, *};
 
 pub struct RpcClient {
     client: publisher::Client<event::Owned>,
@@ -33,30 +39,70 @@ impl RpcClient {
     }
 }
 
-pub struct Consumer;
+pub struct Consumer {
+    ch: Sender<(Entity, Event, Entity)>,
+}
 impl consumer::Server<event::Owned> for Consumer {
     fn push(
         &mut self,
         params: consumer::PushParams<event::Owned>,
         _res: consumer::PushResults<event::Owned>,
     ) -> Promise<(), capnp::Error> {
+        let tx = self.ch.clone();
         Promise::from_future(async move {
             let event = params.get()?.get_event()?;
-            println!(
-                "event pushed: {}, {}, {}",
-                event.get_pid(),
-                event.get_ppid(),
-                event.get_proc_name()?
-            );
+            let detail = event.get_detail();
+
+            let subject = Entity::Process(Process {
+                name: String::from(event.get_proc_file()?),
+                pid: event.get_pid(),
+                ppid: event.get_ppid(),
+            });
+            match detail.which()? {
+                File(file) => {
+                    use FileAccess::*;
+                    let file = file?;
+                    let access = match file.get_access()? {
+                        Read => EventType::Read,
+                        Write => EventType::Write,
+                        Exec => EventType::Exec,
+                        Open => EventType::Open,
+                    };
+                    let graph_event = Event {
+                        access,
+                        timestamp: event.get_time_stamp(),
+                    };
+                    let object = Entity::File(graph::File {
+                        name: String::from(file.get_name()?),
+                    });
+                    tx.send((subject, graph_event, object)).await;
+                }
+                Fork(_) => (),
+                Tcp(tcp) => {
+                    let tcp = tcp?;
+                    let access = EventType::Open;
+                    let event_graph = Event {
+                        access,
+                        timestamp: event.get_time_stamp(),
+                    };
+                    let object = Entity::NetworkEndpoint(graph::NetworkEndpoint {
+                        addr: String::from(tcp.get_address()?),
+                    });
+                    tx.send((subject, event_graph, object)).await;
+                }
+            }
             Ok(())
         })
     }
 }
 
-pub async fn subscribe(addr: &SocketAddr) -> Result<(), io::Error> {
+pub async fn subscribe(
+    addr: &SocketAddr,
+    ch: Sender<(Entity, Event, Entity)>,
+) -> Result<(), io::Error> {
     let (rpc_system, client) = connect(addr)?;
 
-    let consumer = consumer::ToClient::new(Consumer).into_client::<capnp_rpc::Server>();
+    let consumer = consumer::ToClient::new(Consumer { ch }).into_client::<capnp_rpc::Server>();
 
     let mut rpc_system = rpc_system.fuse();
     let mut subscribe = Box::pin(client.subscribe(consumer)).fuse();

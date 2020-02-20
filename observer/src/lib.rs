@@ -6,4 +6,5 @@ mod kvmi_capnp {
 }
 
 pub mod collect;
+pub mod graph;
 pub mod rpc;

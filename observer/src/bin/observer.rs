@@ -4,9 +4,10 @@ use std::process;
 
 use structopt::StructOpt;
 
+use async_std::sync;
 use async_std::task;
 
-use observer::rpc;
+use observer::{graph, rpc};
 
 #[derive(StructOpt)]
 struct Opt {
@@ -23,6 +24,12 @@ fn main() {
 
 fn run() -> Result<(), Error> {
     let opt = Opt::from_args();
-    task::block_on(rpc::subscribe(&opt.addr))?;
+
+    env_logger::init();
+
+    let (tx, rx) = sync::channel(100);
+    let constructor = task::spawn(graph::construct(rx));
+    task::block_on(rpc::subscribe(&opt.addr, tx))?;
+    task::block_on(async { constructor.await });
     Ok(())
 }
