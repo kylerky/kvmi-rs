@@ -36,21 +36,33 @@ async fn tcp_receive_(
     enable_ss: bool,
     orig: u8,
 ) -> Result<(), Error> {
+    match handle_tcp_receive(dom, event, extra, log_tx, enable_ss, orig).await {
+        Ok(()) => Ok(()),
+        Err(Error::InvalidVAddr) => dom.resume_from_bp(orig, event, extra, enable_ss).await,
+        Err(e) => {
+            if let Err(err) = dom.resume_from_bp(orig, event, extra, enable_ss).await {
+                error!("Error resuming from bp: {}", err);
+            }
+            Err(e)
+        }
+    }
+}
+
+async fn handle_tcp_receive(
+    dom: &mut Domain,
+    event: &Event,
+    extra: &KvmiEventBreakpoint,
+    log_tx: &Sender<LogChT>,
+    enable_ss: bool,
+    orig: u8,
+) -> Result<(), Error> {
     let sregs = &event.get_arch().sregs;
     let (_, pid, ppid, proc_name) = super::get_process(dom, event, sregs).await?;
 
     let regs = &event.get_arch().regs;
     let v_space = dom.get_k_vspace();
 
-    let addr = match get_ip(v_space, regs).await {
-        Err(e) => {
-            if let Err(err) = dom.resume_from_bp(orig, event, extra, enable_ss).await {
-                error!("Error resuming from bp: {}", err)
-            }
-            return Err(e);
-        }
-        Ok(ip) => ip,
-    };
+    let addr = get_ip(v_space, regs).await?;
     dom.resume_from_bp(orig, event, extra, enable_ss).await?;
 
     let mut message = capnp::message::Builder::new_default();

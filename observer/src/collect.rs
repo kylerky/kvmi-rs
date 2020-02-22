@@ -5,6 +5,7 @@ use std::fs::{self, Permissions};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use async_std::os::unix::net::UnixListener;
 use async_std::prelude::*;
@@ -90,7 +91,9 @@ impl<'a> EventHandler<'a> {
 }
 impl<'a> Drop for EventHandler<'a> {
     fn drop(&mut self) {
-        if let Err(e) = task::block_on(shutdown(self)) {
+        if let Err(e) = task::block_on(async_std::io::timeout(Duration::from_secs(5), async {
+            shutdown(self).await.map_err(|e| e.into())
+        })) {
             error!("Error shutting down: {}", e);
         }
     }

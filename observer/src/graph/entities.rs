@@ -1,23 +1,23 @@
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Entity {
     Process(Process),
     File(File),
     NetworkEndpoint(NetworkEndpoint),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Process {
     pub pid: u64,
     pub ppid: u64,
     pub name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct File {
     pub name: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NetworkEndpoint {
     pub addr: String,
 }

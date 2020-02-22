@@ -9,6 +9,8 @@ use async_std::task;
 
 use observer::{graph, rpc};
 
+use regex::RegexSet;
+
 #[derive(StructOpt)]
 struct Opt {
     addr: SocketAddr,
@@ -27,9 +29,14 @@ fn run() -> Result<(), Error> {
 
     env_logger::init();
 
-    let (tx, rx) = sync::channel(100);
-    let constructor = task::spawn(graph::construct(rx));
-    task::block_on(rpc::subscribe(&opt.addr, tx))?;
+    let (log_tx, log_rx) = sync::channel(300);
+    let (graph_tx, _graph_rx) = sync::channel(10);
+
+    let secrets_pat = [r".*\.secret$", r".*\.kvmi$"];
+    let secrets = RegexSet::new(&secrets_pat).unwrap();
+    let constructor = task::spawn(graph::construct(log_rx, graph_tx, secrets));
+
+    task::block_on(rpc::subscribe(&opt.addr, log_tx))?;
     task::block_on(async { constructor.await });
     Ok(())
 }

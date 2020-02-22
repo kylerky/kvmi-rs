@@ -97,7 +97,7 @@ async fn get_file_info(
     let mut fname = memory::read_utf16(&v_space, fname_ptr).await?;
 
     if let Ok(dir) = get_root_dir(&v_space, process, *obj_attr_ptr, profile).await {
-        fname = format!("{}\\{}", dir, fname);
+        fname = format!(r"{}\\{}", dir, fname);
     }
 
     Ok(fname)
