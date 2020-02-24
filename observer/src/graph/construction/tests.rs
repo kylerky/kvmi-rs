@@ -1,8 +1,10 @@
 use crate::graph::entities::*;
 
-use super::analysis;
+use super::analysis::{self, THRESHOLD};
 use super::provenance::*;
 use super::Constructor;
+
+use std::collections::HashSet;
 
 use regex::RegexSet;
 
@@ -10,6 +12,7 @@ use pretty_assertions::assert_eq;
 
 use petgraph::algo;
 
+const TROJAN_NAME: &str = r"\\file\\trojan.exe";
 fn gen_logs() -> Vec<(Entity, Event, Entity)> {
     // event parameters
     let ppid = 575;
@@ -25,7 +28,7 @@ fn gen_logs() -> Vec<(Entity, Event, Entity)> {
         name: hole.to_string(),
     });
 
-    let trojan = r"\\file\\trojan.exe";
+    let trojan = TROJAN_NAME;
     let trojan_pid = 578;
     let trojan_time = 220;
     let trojan_entity = Entity::Process(Process {
@@ -213,7 +216,7 @@ fn test_gen_alert() {
     let (reference, _, _) = gen_ref_graph();
 
     assert!(algo::is_isomorphic_matching(
-        constructor.provenance.get_graph(),
+        constructor.provenance.get_flow(),
         &reference,
         |prov, re| {
             let mut re_node = re.clone();
@@ -236,4 +239,41 @@ fn test_backward_analysis() {
     let (reference, src, expect) = gen_ref_graph();
     let actual = analysis::backward_path(&reference, vec![src]);
     assert_eq!(actual, Some(expect));
+}
+
+#[test]
+fn test_forward_analysis() {
+    let (provenance, _, (cost, path)) = gen_ref_graph();
+    let provenance = ProvenanceGraph::from(provenance);
+
+    let actual = analysis::forward_construction(&provenance, path, cost + THRESHOLD)
+        .expect("Should give a result graph");
+
+    let (reference, _, (_, path)) = gen_ref_graph();
+    let node_set: HashSet<NodeIdx> = path.iter().copied().collect();
+
+    let reference = reference.filter_map(
+        |node, node_ref| {
+            node_set
+                .get(&node)
+                .map(|_| node_ref.clone())
+                .or_else(|| match node_ref {
+                    TaggedEntity {
+                        entity: Entity::File(File { name }),
+                        ..
+                    } if name == TROJAN_NAME => Some(node_ref.clone()),
+                    _ => None,
+                })
+        },
+        |_edge, edge_ref| Some(edge_ref.clone()),
+    );
+    assert!(algo::is_isomorphic_matching(
+        &actual,
+        &reference,
+        |prov, re| {
+            assert_eq!(prov, re);
+            true
+        },
+        |_, _| true,
+    ));
 }

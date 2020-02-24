@@ -2,13 +2,19 @@ use super::provenance::*;
 
 use petgraph::algo;
 use petgraph::prelude::*;
-use petgraph::visit::{Data, IntoEdgesDirected, Reversed};
+use petgraph::visit::{self, Control, DfsEvent, IntoEdgesDirected, Reversed};
 
 use crate::graph::entities::Entity;
 
-pub fn backward_path(graph: &ProvGraph, sources: Vec<NodeIdx>) -> Option<(u32, Vec<NodeIdx>)> {
-    use TrustTag::*;
+use std::collections::HashMap;
 
+const HI_COST: u32 = 100;
+pub const THRESHOLD: u32 = 4 * HI_COST;
+
+pub(super) fn backward_path(
+    graph: &ProvGraph,
+    sources: Vec<NodeIdx>,
+) -> Option<(u32, Vec<NodeIdx>)> {
     let rev_graph = Reversed(graph);
     algo::astar(
         rev_graph,
@@ -44,46 +50,97 @@ pub fn backward_path(graph: &ProvGraph, sources: Vec<NodeIdx>) -> Option<(u32, V
             let source = &graph[edge.source()];
             let target = &graph[edge.target()];
 
-            let src_dt = source.data_ttag;
-            let mut src_ct = source.code_ttag;
-            let tgt_dt = target.data_ttag;
-            let mut tgt_ct = target.code_ttag;
-            match source {
-                TaggedEntity {
-                    entity: Entity::Process(_),
-                    ..
-                } => (),
-                _ => src_ct = src_dt,
-            }
-            match target {
-                TaggedEntity {
-                    entity: Entity::Process(_),
-                    ..
-                } => (),
-                _ => tgt_ct = tgt_dt,
-            }
-
-            match (src_ct, src_dt, tgt_ct, tgt_dt) {
-                (Unknown, Unknown, _, Unknown) | (Unknown, Unknown, Unknown, _) => 1,
-                (_, _, _, Unknown) | (_, _, Unknown, _) => 0,
-                _ => 100,
-            }
+            get_cost(get_tags(source, target))
         },
         |_| 0,
     )
 }
 
-pub fn forward_construction(graph: &ProvGraph, path: Vec<NodeIdx>) -> ProvGraph {
-    let mut nodes: Vec<<ProvGraph as Data>::NodeWeight> =
-        path.iter().map(|node| &graph[*node]).cloned().collect();
+pub(super) fn forward_construction(
+    provenance: &ProvenanceGraph,
+    path: Vec<NodeIdx>,
+    threshold: u32,
+) -> Option<ProvGraph> {
+    use ConfidTag::*;
+    use Control::*;
+    use DfsEvent::*;
+    use TrustTag::*;
 
-    let mut result = Graph::new();
-    let nodes: Vec<NodeIdx> = nodes.drain(..).map(|node| result.add_node(node)).collect();
+    path.last().map(|entry| {
+        let mut result = Graph::new();
+        let entry_node = result.add_node(provenance[*entry].clone());
 
-    let num = nodes.len();
-    let edges = nodes[1..].iter().zip(nodes[..num - 1].iter());
-    for (s, d) in edges {
-        result.add_edge(*s, *d, Log::from(vec![]));
+        let mut distances = HashMap::new();
+        distances.insert(*entry, (0, entry_node));
+
+        visit::depth_first_search::<_, _, _, Control<()>>(
+            provenance.get_flow(),
+            Some(*entry),
+            |event| {
+                match event {
+                    TreeEdge(source, target) => {
+                        let source_ent = &provenance[source];
+                        let target_ent = &provenance[target];
+
+                        let tags = get_tags(target_ent, source_ent);
+                        let mut cost = get_cost(tags);
+                        if cost == HI_COST {
+                            cost = match (source_ent.ctag, tags) {
+                                (Secret, (Unknown, _, _, _)) | (Secret, (_, Unknown, _, _)) => 0,
+                                _ => HI_COST,
+                            }
+                        }
+                        let (dist, src_node) = *distances.get(&source).unwrap();
+                        let dist = cost + dist;
+                        if dist > threshold {
+                            return Prune;
+                        }
+                        let tgt_node = result.add_node(provenance[target].clone());
+                        distances.insert(target, (dist, tgt_node));
+                        result.add_edge(src_node, tgt_node, Log::from(vec![]));
+                    }
+                    BackEdge(source, target) | CrossForwardEdge(source, target) => {
+                        let (_, src_node) = *distances.get(&source).unwrap();
+                        let (_, tgt_node) = *distances.get(&target).unwrap();
+                        result.add_edge(src_node, tgt_node, Log::from(vec![]));
+                    }
+                    _ => (),
+                }
+                Continue
+            },
+        );
+
+        result
+    })
+}
+
+fn get_tags(e1: &TaggedEntity, e2: &TaggedEntity) -> (TrustTag, TrustTag, TrustTag, TrustTag) {
+    let e1_dt = e1.data_ttag;
+    let mut e1_ct = e1.code_ttag;
+    let e2_dt = e2.data_ttag;
+    let mut e2_ct = e2.code_ttag;
+    match e1 {
+        TaggedEntity {
+            entity: Entity::Process(_),
+            ..
+        } => (),
+        _ => e1_ct = e1_dt,
     }
-    result
+    match e2 {
+        TaggedEntity {
+            entity: Entity::Process(_),
+            ..
+        } => (),
+        _ => e2_ct = e2_dt,
+    }
+    (e1_ct, e1_dt, e2_ct, e2_dt)
+}
+
+fn get_cost(tags: (TrustTag, TrustTag, TrustTag, TrustTag)) -> u32 {
+    use TrustTag::*;
+    match tags {
+        (_, Unknown, Unknown, Unknown) | (Unknown, _, Unknown, Unknown) => 1,
+        (_, Unknown, _, _) | (Unknown, _, _, _) => 0,
+        _ => HI_COST,
+    }
 }

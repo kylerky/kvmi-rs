@@ -5,6 +5,7 @@ mod provenance;
 pub(crate) use provenance::*;
 
 pub(crate) mod analysis;
+use analysis::THRESHOLD;
 
 pub(crate) mod alarms;
 
@@ -47,11 +48,19 @@ pub async fn construct(
     while let Some((subject, event, object)) = log_rx.recv().await {
         let alerts = gen_alert(&mut constructor, subject, event, object);
         if !alerts.is_empty() {
-            if let Some(graph) = constructor.provenance.analyse(alerts) {
+            if let Some(graph) = analyse(&constructor, alerts) {
                 graph_tx.send(graph).await;
             }
         }
     }
+}
+
+fn analyse(constructor: &Constructor, alerts: Vec<NodeIdx>) -> Option<ProvGraph> {
+    analysis::backward_path(constructor.provenance.get_flow(), alerts)
+        .map(|(cost, path)| {
+            analysis::forward_construction(&constructor.provenance, path, THRESHOLD + cost)
+        })
+        .flatten()
 }
 
 fn gen_alert(

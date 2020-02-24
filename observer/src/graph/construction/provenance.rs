@@ -9,8 +9,6 @@ use std::collections::HashMap;
 use std::fmt::{self, Display, Formatter};
 use std::ops::{Index, IndexMut};
 
-use super::analysis;
-
 pub type IndexType = u32;
 pub type NodeIdx = NodeIndex<IndexType>;
 pub type EdgeIdx = EdgeIndex<IndexType>;
@@ -43,6 +41,7 @@ impl Display for TaggedEntity {
     }
 }
 
+#[derive(Clone)]
 pub struct Log {
     events: Vec<Event>,
 }
@@ -94,6 +93,10 @@ impl ProvenanceGraph {
             .or_insert_with(|| flow.add_edge(from, to, Log::from(vec![weight])))
     }
 
+    pub fn edge_from_to(&self, from: NodeIdx, to: NodeIdx) -> Option<EdgeIdx> {
+        self.edges.get(&(from, to)).copied()
+    }
+
     pub fn get_dot_with_config<'a>(&'a self, config: &'a [Config]) -> Dot<&'a ProvGraph> {
         Dot::with_config(&self.flow, config)
     }
@@ -106,12 +109,7 @@ impl ProvenanceGraph {
         self.flow.index_twice_mut(first, second)
     }
 
-    pub fn analyse(&self, alerts: Vec<NodeIdx>) -> Option<ProvGraph> {
-        analysis::backward_path(&self.flow, alerts)
-            .map(|(_, path)| analysis::forward_construction(&self.flow, path))
-    }
-
-    pub fn get_graph(&self) -> &ProvGraph {
+    pub fn get_flow(&self) -> &ProvGraph {
         &self.flow
     }
 }
@@ -127,5 +125,18 @@ impl Index<NodeIdx> for ProvenanceGraph {
 impl IndexMut<NodeIdx> for ProvenanceGraph {
     fn index_mut(&mut self, idx: NodeIdx) -> &mut Self::Output {
         &mut self.flow[idx]
+    }
+}
+
+impl From<ProvGraph> for ProvenanceGraph {
+    fn from(flow: ProvGraph) -> Self {
+        let edges = flow
+            .edge_indices()
+            .map(|edge| {
+                let (source, target) = flow.edge_endpoints(edge).unwrap();
+                ((source, target), edge)
+            })
+            .collect();
+        Self { flow, edges }
     }
 }
