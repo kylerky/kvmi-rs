@@ -12,7 +12,7 @@ use crate::Result;
 const CACHE_CAP: usize = 1 << 18;
 const PADDR_KEY: PhysicalAddrT = !PADDR_OFFSET;
 
-const STALE_TIMEOUT: Duration = Duration::from_millis(2000);
+const STALE_TIMEOUT: Duration = Duration::from_millis(100);
 
 pub struct StalePageCache {
     pages: LruCache<PhysicalAddrT, (Vec<u8>, Instant)>,
@@ -84,7 +84,14 @@ impl StalePageCache {
         Ok(ret)
     }
 
-    pub async fn remove(&mut self, _dom: &Domain, _addr: PhysicalAddrT) -> Result<()> {
+    pub async fn remove(&mut self, _dom: &Domain, addr: PhysicalAddrT) -> Result<()> {
+        let key = addr & PADDR_KEY;
+        self.pages.pop(&key);
+        Ok(())
+    }
+
+    pub async fn flush(&mut self, _dom: &Domain) -> Result<()> {
+        self.pages.clear();
         Ok(())
     }
 }

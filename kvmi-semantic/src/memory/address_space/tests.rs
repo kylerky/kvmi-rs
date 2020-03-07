@@ -21,6 +21,7 @@ mock! {
         async fn read(&self, addr: AddressType, sz: usize) -> Result<Vec<u8>, Error>;
         async fn write(&self, addr: AddressType, data: Vec<u8>) -> Result<(), Error>;
         async fn evict(&self, addr: AddressType) -> Result<(), Error>;
+        async fn flush(&self) -> Result<(), Error>;
         async fn read_within_page(
             &self,
             key: AddressType,

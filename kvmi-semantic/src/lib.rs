@@ -274,8 +274,8 @@ impl Domain {
         &self.tcpip_profile
     }
 
-    pub async fn get_current_process(&self, sregs: &kvm_sregs) -> Result<IA32eAddrT> {
-        let process = process::get_current_process(&self.k_vspace, sregs, &self.profile).await?;
+    pub async fn get_current_process(&self, event: &Event) -> Result<IA32eAddrT> {
+        let process = process::get_current_process(&self.k_vspace, event, &self.profile).await?;
         Ok(process)
     }
 

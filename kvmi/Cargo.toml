@@ -13,7 +13,7 @@ exitcode = "1.1"
 log = "0.4"
 mio = "0.6"
 libc = "0.2"
-async-std = {version = "1.4", features = ["unstable"]}
+async-std = { git = "https://github.com/async-rs/async-std", branch = "new-scheduler", features = ["unstable"] }
 futures = "0.3"
 
 [dev-dependencies]

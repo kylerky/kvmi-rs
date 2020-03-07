@@ -18,6 +18,8 @@ use futures::future::FutureExt;
 use futures::select;
 use futures::stream::StreamExt;
 
+use kvmi::Event;
+
 const SYSTEM_PID: u64 = 4;
 
 pub(crate) type PSChanT = Result<u64>;
@@ -161,12 +163,12 @@ pub async fn traverse_process_list(
 
 pub async fn get_current_process(
     v_space: &IA32eVirtual,
-    sregs: &kvm_sregs,
+    event: &Event,
     profile: &RekallProfile,
 ) -> Result<IA32eAddrT> {
     let process_rva = crate::get_struct_field_offset(profile, "_KTHREAD", "Process")?;
 
-    let thread_ptr = get_current_thread(v_space, sregs, profile).await?;
+    let thread_ptr = get_current_thread(v_space, event, profile).await?;
     let process_ptr = v_space.read(thread_ptr + process_rva, PTR_SZ).await?;
     let process_ptr = u64::from_ne_bytes(process_ptr[..].try_into().unwrap());
 
@@ -175,17 +177,19 @@ pub async fn get_current_process(
 
 pub async fn get_current_thread(
     v_space: &IA32eVirtual,
-    sregs: &kvm_sregs,
+    event: &Event,
     profile: &RekallProfile,
 ) -> Result<IA32eAddrT> {
     let prcb_rva = crate::get_struct_field_offset(profile, "_KPCR", "Prcb")?;
     let curr_thread_rva = crate::get_struct_field_offset(profile, "_KPRCB", "CurrentThread")?;
 
-    let gs_base = sregs.gs.base;
-    let thread_ptr = v_space
-        .read(gs_base + prcb_rva + curr_thread_rva, PTR_SZ)
-        .await?;
-    let thread_ptr = u64::from_ne_bytes(thread_ptr[..].try_into().unwrap());
+    let gs_base = event.get_arch().sregs.gs.base;
+    let addr = gs_base + prcb_rva + curr_thread_rva;
+    let thread_ptr_physical = v_space.lookup(addr).await?;
+    let p_space = v_space.get_base();
+    p_space.evict(thread_ptr_physical).await?;
+    let thread_ptr = p_space.read(thread_ptr_physical, PTR_SZ).await?;
+    let thread_ptr = IA32eAddrT::from_ne_bytes(thread_ptr[..].try_into().unwrap());
 
     Ok(thread_ptr)
 }

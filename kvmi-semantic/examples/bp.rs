@@ -273,8 +273,7 @@ async fn get_pid(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<u
     let profile = dom.get_profile();
 
     let uid_rva = profile.get_struct_field_offset("_EPROCESS", "UniqueProcessId")?;
-    let arch = event.get_arch();
-    let process = dom.get_current_process(&arch.sregs).await?;
+    let process = dom.get_current_process(event).await?;
     let pid = v_space.read(process + uid_rva, 8).await?;
     let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
     Ok(pid)

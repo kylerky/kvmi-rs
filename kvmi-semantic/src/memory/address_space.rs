@@ -89,6 +89,11 @@ mod kvmi_physical {
             cache.remove(&self.dom, addr).await
         }
 
+        pub async fn flush(&self) -> Result<()> {
+            let mut cache = self.cache.lock().await;
+            cache.flush(&self.dom).await
+        }
+
         // validate if the access is across page boundary
         fn validate(addr: PhysicalAddrT, sz: usize) -> Result<()> {
             let offset = addr & PADDR_OFFSET;
