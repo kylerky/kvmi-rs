@@ -1,6 +1,5 @@
 use super::address_space::{IA32eAddrT, IA32eVirtual};
 use super::CR3_MASK;
-use crate::event::kvm_sregs;
 use crate::{Error, RekallProfile, Result};
 use crate::{BLINK, EPROCESS, FLINK, LIST_ENTRY, PTR_SZ};
 

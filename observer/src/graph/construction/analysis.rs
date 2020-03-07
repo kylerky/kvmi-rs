@@ -52,7 +52,7 @@ pub(super) fn backward_path(
         },
         |_| 0,
     )
-    .or(Some((0, vec![sources[0]])))
+    .or_else(|| Some((0, vec![sources[0]])))
 }
 
 pub(super) fn forward_construction(
