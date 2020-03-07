@@ -56,13 +56,18 @@ async fn handle_tcp_receive(
     enable_ss: bool,
     orig: u8,
 ) -> Result<(), Error> {
-    let sregs = &event.get_arch().sregs;
-    let (_, pid, ppid, proc_name) = super::get_process(dom, event, sregs).await?;
-
-    let regs = &event.get_arch().regs;
     let v_space = dom.get_k_vspace();
 
-    let addr = get_ip(v_space, regs).await?;
+    let regs = &event.get_arch().regs;
+    let args = MSx64::new(&v_space, regs, 1).await?;
+    let p_tcp_end = args.get(0).unwrap();
+    let process = v_space.read(p_tcp_end + 0x290, 8).await?;
+    let process = IA32eAddrT::from_ne_bytes(process[..8].try_into().unwrap());
+    let (pid, ppid, proc_name) = super::get_process_by(v_space, process, dom.get_profile()).await?;
+
+    let regs = &event.get_arch().regs;
+
+    let addr = get_ip(&v_space, regs).await?;
     dom.resume_from_bp(orig, event, extra, enable_ss).await?;
 
     let mut message = capnp::message::Builder::new_default();

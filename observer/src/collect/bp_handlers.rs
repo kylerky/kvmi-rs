@@ -16,17 +16,42 @@ use std::time::SystemTime;
 
 use super::BPHandler;
 
+async fn get_process_by(
+    v_space: &IA32eVirtual,
+    process: IA32eAddrT,
+    profile: &RekallProfile,
+) -> Result<(u64, u64, String), Error> {
+    let pid_rva = profile.get_struct_field_offset("_EPROCESS", "UniqueProcessId")?;
+    let pid = v_space.read(process + pid_rva, 8).await?;
+    let pid = u64::from_ne_bytes(pid[..].try_into().unwrap());
+
+    let ppid_rva = profile.get_struct_field_offset("_EPROCESS", "InheritedFromUniqueProcessId")?;
+    let ppid = v_space.read(process + ppid_rva, 8).await?;
+    let ppid = u64::from_ne_bytes(ppid[..].try_into().unwrap());
+
+    let image_file_ptr_rva = profile.get_struct_field_offset("_EPROCESS", "ImageFilePointer")?;
+    let image_file_ptr = v_space.read(process + image_file_ptr_rva, 8).await?;
+    let image_file_ptr = IA32eAddrT::from_ne_bytes(image_file_ptr[..].try_into().unwrap());
+
+    let proc_file = if image_file_ptr != 0 {
+        let name_rva = profile.get_struct_field_offset("_FILE_OBJECT", "FileName")?;
+        memory::read_utf16(&v_space, image_file_ptr + name_rva).await?
+    } else {
+        String::new()
+    };
+
+    Ok((pid, ppid, proc_file))
+}
+
 async fn get_process(
     dom: &mut Domain,
     event: &Event,
     _sregs: &kvm_sregs,
 ) -> Result<(IA32eAddrT, u64, u64, String), Error> {
-    // let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
     let v_space = dom.get_k_vspace();
     let profile = dom.get_profile();
 
-    let arch = event.get_arch();
-    let process = dom.get_current_process(&arch.sregs).await?;
+    let process = dom.get_current_process(event).await?;
 
     let pid_rva = profile.get_struct_field_offset("_EPROCESS", "UniqueProcessId")?;
     let pid = v_space.read(process + pid_rva, 8).await?;
