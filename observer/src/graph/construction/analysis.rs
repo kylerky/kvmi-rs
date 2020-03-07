@@ -36,10 +36,8 @@ pub(super) fn backward_path(
                         entity: Entity::Process(_),
                         code_ttag: TrustTag::Unknown,
                         ..
-                    } => {
-                        if rev_graph.edges_directed(node, Outgoing).next().is_none() {
-                            return true;
-                        }
+                    } if rev_graph.edges_directed(node, Outgoing).next().is_none() => {
+                        return true;
                     }
                     _ => (),
                 }
@@ -54,6 +52,7 @@ pub(super) fn backward_path(
         },
         |_| 0,
     )
+    .or(Some((0, vec![sources[0]])))
 }
 
 pub(super) fn forward_construction(

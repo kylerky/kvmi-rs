@@ -93,7 +93,7 @@ fn run() -> Result<(), Error> {
     });
 
     let (rpc_addr, kvmi, _) = opt.get_paths();
-    let (log_tx, log_rx) = sync::channel(250);
+    let (log_tx, log_rx) = sync::channel(50);
     let close_rx2 = close_rx.clone();
 
     let collect_handle = task::spawn(async move {

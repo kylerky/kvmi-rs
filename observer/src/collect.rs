@@ -152,7 +152,7 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
         let vcpu = event.get_vcpu();
         dom.toggle_event(vcpu, Breakpoint, true).await?;
         dom.toggle_event(vcpu, SingleStep, true).await?;
-        dom.toggle_event(vcpu, PF, true).await?;
+        dom.toggle_event(vcpu, PF, false).await?;
 
         let tcpip_base = dom.find_module(TCPIP_SYS).await?;
         debug!("tcpip.sys base: 0x{:x?}", tcpip_base);

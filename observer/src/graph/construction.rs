@@ -45,7 +45,24 @@ pub async fn construct(
     secrets: RegexSet,
 ) {
     let mut constructor = Constructor::new(secrets);
+    let mut prev_tuple = (
+        Entity::File(File {
+            name: String::new(),
+        }),
+        Event {
+            access: EventType::Open,
+            timestamp: 0,
+        },
+        Entity::File(File {
+            name: String::new(),
+        }),
+    );
     while let Some((subject, event, object)) = log_rx.recv().await {
+        if subject == prev_tuple.0 && object == prev_tuple.2 && event.access == prev_tuple.1.access
+        {
+            continue;
+        }
+        prev_tuple = (subject.clone(), event.clone(), object.clone());
         let alerts = gen_alert(&mut constructor, subject, event, object);
         if !alerts.is_empty() {
             if let Some(graph) = analyse(&constructor, alerts) {
@@ -174,7 +191,7 @@ fn trigger_exec(subject: &mut TaggedEntity, object: &mut TaggedEntity) -> bool {
     alert
 }
 
-const CMD_EXE: &str = r"\\Windows\\System32\\cmd.exe";
+const CMD_EXE: &str = r"\Windows\System32\cmd.exe";
 fn get_procs(
     pids: &mut HashMap<u64, NodeIdx>,
     files: &mut HashMap<String, NodeIdx>,

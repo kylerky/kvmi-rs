@@ -17,6 +17,8 @@ task:
   matrix:
     - name: test
       test_script: cargo test --workspace --verbose
+    - name: test (release)
+      test_script: cargo test --release --workspace --verbose
     - name: format
       fmt_script: cargo fmt --all -- --check
     - name: clippy
