@@ -2,7 +2,7 @@
 mod tests;
 
 mod cache;
-use cache::StalePageCache as PageCache;
+use cache::PageCache;
 
 use cfg_if::cfg_if;
 

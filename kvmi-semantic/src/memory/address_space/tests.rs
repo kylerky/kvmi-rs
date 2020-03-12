@@ -8,7 +8,8 @@ use async_std::sync::Arc;
 use super::kvmi_physical::*;
 use super::{AddressSpace, IA32eVirtual};
 use crate::Error;
-use kvmi::message::{Message, ReadPhysical};
+use kvmi::message::{Message, ReadPhysical, SetPageAccess};
+use kvmi::PageAccessEntryBuilder;
 
 use pretty_assertions::assert_eq;
 
@@ -98,8 +99,20 @@ async fn read_direct() {
 
     let mut dom = MockDomain::default();
 
+    let mut msg = SetPageAccess::new();
+    let mut builder = PageAccessEntryBuilder::new(key);
+    builder.set_read().set_execute();
+    msg.push(builder.build());
+    let mut seq = Sequence::new();
+    dom.expect_send::<SetPageAccess>()
+        .once()
+        .in_sequence(&mut seq)
+        .with(eq(msg))
+        .returning(|_| Ok(()));
+
     dom.expect_send::<ReadPhysical>()
         .once()
+        .in_sequence(&mut seq)
         .with(eq(ReadPhysical::new(key, PHYSICAL_PAGE_SZ as u64)))
         .returning(move |_| {
             let mut v = vec![0u8; PHYSICAL_PAGE_SZ];
@@ -133,7 +146,17 @@ async fn read_across_1() {
 
     let mut dom = MockDomain::default();
 
+    let mut msg = SetPageAccess::new();
+    let mut builder = PageAccessEntryBuilder::new(key);
+    builder.set_read().set_execute();
+    msg.push(builder.build());
     let mut seq = Sequence::new();
+    dom.expect_send::<SetPageAccess>()
+        .once()
+        .in_sequence(&mut seq)
+        .with(eq(msg))
+        .returning(|_| Ok(()));
+
     dom.expect_send::<ReadPhysical>()
         .once()
         .in_sequence(&mut seq)
@@ -147,6 +170,17 @@ async fn read_across_1() {
             }
             Ok(v)
         });
+
+    let mut msg = SetPageAccess::new();
+    let mut builder = PageAccessEntryBuilder::new(key2);
+    builder.set_read().set_execute();
+    msg.push(builder.build());
+    let mut seq = Sequence::new();
+    dom.expect_send::<SetPageAccess>()
+        .once()
+        .in_sequence(&mut seq)
+        .with(eq(msg))
+        .returning(|_| Ok(()));
 
     dom.expect_send::<ReadPhysical>()
         .once()
@@ -184,7 +218,17 @@ async fn read_across_2() {
 
     let mut dom = MockDomain::default();
 
+    let mut msg = SetPageAccess::new();
+    let mut builder = PageAccessEntryBuilder::new(key);
+    builder.set_read().set_execute();
+    msg.push(builder.build());
     let mut seq = Sequence::new();
+    dom.expect_send::<SetPageAccess>()
+        .once()
+        .in_sequence(&mut seq)
+        .with(eq(msg))
+        .returning(|_| Ok(()));
+
     dom.expect_send::<ReadPhysical>()
         .once()
         .in_sequence(&mut seq)
@@ -199,6 +243,17 @@ async fn read_across_2() {
             Ok(v)
         });
 
+    let mut msg = SetPageAccess::new();
+    let mut builder = PageAccessEntryBuilder::new(key2);
+    builder.set_read().set_execute();
+    msg.push(builder.build());
+    let mut seq = Sequence::new();
+    dom.expect_send::<SetPageAccess>()
+        .once()
+        .in_sequence(&mut seq)
+        .with(eq(msg))
+        .returning(|_| Ok(()));
+
     dom.expect_send::<ReadPhysical>()
         .once()
         .in_sequence(&mut seq)
@@ -210,6 +265,17 @@ async fn read_across_2() {
             }
             Ok(v)
         });
+
+    let mut msg = SetPageAccess::new();
+    let mut builder = PageAccessEntryBuilder::new(key3);
+    builder.set_read().set_execute();
+    msg.push(builder.build());
+    let mut seq = Sequence::new();
+    dom.expect_send::<SetPageAccess>()
+        .once()
+        .in_sequence(&mut seq)
+        .with(eq(msg))
+        .returning(|_| Ok(()));
 
     dom.expect_send::<ReadPhysical>()
         .once()

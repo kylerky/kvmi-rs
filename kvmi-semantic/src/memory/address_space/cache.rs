@@ -1,27 +1,30 @@
 use super::{Domain, PhysicalAddrT};
 use super::{PADDR_OFFSET, PHYSICAL_PAGE_SZ};
 
-use kvmi::message::ReadPhysical;
+use kvmi::message::{ReadPhysical, SetPageAccess};
+use kvmi::PageAccessEntryBuilder;
 
 use lru::LruCache;
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::Result;
 
 const CACHE_CAP: usize = 1 << 18;
+const VOLATILE_TIMEOUT: Duration = Duration::from_millis(10);
 const PADDR_KEY: PhysicalAddrT = !PADDR_OFFSET;
 
-const STALE_TIMEOUT: Duration = Duration::from_millis(100);
-
-pub struct StalePageCache {
-    pages: LruCache<PhysicalAddrT, (Vec<u8>, Instant)>,
+pub struct PageCache {
+    pages: LruCache<PhysicalAddrT, Vec<u8>>,
+    volatile: HashMap<PhysicalAddrT, Instant>,
 }
 
-impl StalePageCache {
+impl PageCache {
     pub fn new() -> Self {
         Self {
             pages: LruCache::new(CACHE_CAP),
+            volatile: HashMap::new(),
         }
     }
 
@@ -71,27 +74,51 @@ impl StalePageCache {
         let offset = (addr & PADDR_OFFSET) as usize;
 
         match self.pages.get(&key) {
-            Some((vec, inst)) if Instant::now().duration_since(*inst) < STALE_TIMEOUT => {
-                return Ok(vec[offset..offset + sz].to_vec());
+            Some(vec) => Ok(vec[offset..offset + sz].to_vec()),
+            None => {
+                match self.volatile.get(&key) {
+                    Some(inst) if Instant::now().duration_since(*inst) >= VOLATILE_TIMEOUT => {
+                        self.volatile.remove(&key);
+                    }
+                    Some(_) => {
+                        return Ok(dom
+                            .send(ReadPhysical::new(key | offset as u64, sz as u64))
+                            .await?);
+                    }
+                    None => (),
+                }
+
+                let mut msg = SetPageAccess::new();
+                let mut builder = PageAccessEntryBuilder::new(key);
+                builder.set_read().set_execute();
+                msg.push(builder.build());
+                dom.send(msg).await?;
+
+                let page = dom.send(ReadPhysical::new(key, PHYSICAL_PAGE_SZ)).await?;
+                let ret = page[offset..offset + sz].to_vec();
+                self.pages.put(key, page);
+
+                Ok(ret)
             }
-            _ => (),
         }
-
-        let page = dom.send(ReadPhysical::new(key, PHYSICAL_PAGE_SZ)).await?;
-        let ret = page[offset..offset + sz].to_vec();
-        self.pages.put(key, (page, Instant::now()));
-
-        Ok(ret)
     }
 
-    pub async fn remove(&mut self, _dom: &Domain, addr: PhysicalAddrT) -> Result<()> {
+    pub async fn remove(&mut self, dom: &Domain, addr: PhysicalAddrT) -> Result<()> {
         let key = addr & PADDR_KEY;
-        self.pages.pop(&key);
+        if self.pages.pop(&key).is_some() {
+            let mut msg = SetPageAccess::new();
+            let mut builder = PageAccessEntryBuilder::new(key);
+            builder.set_read().set_write().set_execute();
+            msg.push(builder.build());
+            dom.send(msg).await?;
+        }
+        self.volatile.insert(key, Instant::now());
         Ok(())
     }
 
     pub async fn flush(&mut self, _dom: &Domain) -> Result<()> {
         self.pages.clear();
+        self.volatile.clear();
         Ok(())
     }
 }

@@ -183,11 +183,9 @@ pub async fn get_current_thread(
     let curr_thread_rva = crate::get_struct_field_offset(profile, "_KPRCB", "CurrentThread")?;
 
     let gs_base = event.get_arch().sregs.gs.base;
-    let addr = gs_base + prcb_rva + curr_thread_rva;
-    let thread_ptr_physical = v_space.lookup(addr).await?;
-    let p_space = v_space.get_base();
-    p_space.evict(thread_ptr_physical).await?;
-    let thread_ptr = p_space.read(thread_ptr_physical, PTR_SZ).await?;
+    let thread_ptr = v_space
+        .read(gs_base + prcb_rva + curr_thread_rva, PTR_SZ)
+        .await?;
     let thread_ptr = IA32eAddrT::from_ne_bytes(thread_ptr[..].try_into().unwrap());
 
     Ok(thread_ptr)
