@@ -8,7 +8,7 @@ use futures::FutureExt;
 use async_std::sync::Sender;
 
 use crate::kvmi_capnp::event::detail::{File, Fork, Tcp};
-use crate::kvmi_capnp::FileAccess;
+use crate::kvmi_capnp::{FileAccess, TcpAccess};
 use capnp::capability::Promise;
 use capnp_rpc::rpc_twoparty_capnp::Side;
 use capnp_rpc::twoparty::{VatId, VatNetwork};
@@ -80,7 +80,11 @@ impl consumer::Server<event::Owned> for Consumer {
                 Fork(_) => (),
                 Tcp(tcp) => {
                     let tcp = tcp?;
-                    let access = EventType::Open;
+                    let access = match tcp.get_access()? {
+                        TcpAccess::Send => EventType::Write,
+                        TcpAccess::Recv => EventType::Read,
+                        _ => EventType::Open,
+                    };
                     let event_graph = Event {
                         access,
                         timestamp: event.get_time_stamp(),

@@ -155,17 +155,26 @@ fn gen_alert(
             );
 
             let provenance = &mut constructor.provenance;
-            if let EventType::Open = event.access {
-                provenance.add_log(subject, object, event.clone());
-                provenance.add_log(object, subject, event);
+            match event.access {
+                EventType::Write => {
+                    provenance.add_log(subject, object, event);
 
-                let (subject_entity, object_entity) = provenance.index_twice_mut(subject, object);
-                if trigger_read(subject_entity, object_entity) {
-                    alerts.push(subject);
+                    let (subject_entity, object_entity) =
+                        provenance.index_twice_mut(subject, object);
+                    if trigger_write(subject_entity, object_entity) {
+                        alerts.push(object);
+                    }
                 }
-                if trigger_write(subject_entity, object_entity) {
-                    alerts.push(object);
+                EventType::Read => {
+                    provenance.add_log(object, subject, event);
+
+                    let (subject_entity, object_entity) =
+                        provenance.index_twice_mut(subject, object);
+                    if trigger_read(subject_entity, object_entity) {
+                        alerts.push(subject);
+                    }
                 }
+                _ => (),
             }
         }
         _ => panic!("Unexpected variant of object"),

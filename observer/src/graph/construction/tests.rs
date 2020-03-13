@@ -59,7 +59,7 @@ fn gen_logs() -> Vec<(Entity, Event, Entity)> {
         (
             hole_entity.clone(),
             Event {
-                access: EventType::Open,
+                access: EventType::Read,
                 timestamp: hole_time,
             },
             Entity::NetworkEndpoint(NetworkEndpoint {
@@ -85,7 +85,7 @@ fn gen_logs() -> Vec<(Entity, Event, Entity)> {
         (
             trojan_entity,
             Event {
-                access: EventType::Open,
+                access: EventType::Write,
                 timestamp: leak_time,
             },
             leak_endpoint,
@@ -163,14 +163,12 @@ fn gen_ref_graph() -> (ProvGraph, NodeIdx, (u32, Vec<NodeIdx>)) {
     for (s, t) in [
         (parent, hole_entity),
         (hole_file, hole_entity),
-        (hole_entity, entry_endpoint),
         (entry_endpoint, hole_entity),
         (hole_entity, trojan_file),
         (trojan_file, trojan_entity),
         (hole_entity, trojan_entity),
         (secret_file, trojan_entity),
         (trojan_entity, leak_ip),
-        (leak_ip, trojan_entity),
     ]
     .iter()
     {
@@ -227,8 +225,7 @@ fn test_gen_alert() {
                 } => *name = name.rsplit(r"\\").next().unwrap().to_string(),
                 TaggedEntity { code_ttag, .. } => *code_ttag = prov.code_ttag,
             }
-            assert_eq!(prov, &re_node);
-            true
+            prov == &re_node
         },
         |_, _| true,
     ));

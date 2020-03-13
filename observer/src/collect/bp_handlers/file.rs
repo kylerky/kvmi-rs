@@ -18,7 +18,7 @@ use async_std::sync::Sender;
 use crate::collect::LogChT;
 
 #[allow(dead_code)]
-pub(crate) fn open_file<'a>(
+pub(crate) fn open<'a>(
     dom: &'a mut Domain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
@@ -124,7 +124,7 @@ async fn get_root_dir(
     Ok(dir_name)
 }
 
-pub(crate) fn read_file<'a>(
+pub(crate) fn read<'a>(
     dom: &'a mut Domain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
@@ -146,7 +146,7 @@ async fn read_file_(
     handle_modify(dom, FileAccess::Read, event, extra, log_tx, enable_ss, orig).await
 }
 
-pub(crate) fn write_file<'a>(
+pub(crate) fn write<'a>(
     dom: &'a mut Domain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,

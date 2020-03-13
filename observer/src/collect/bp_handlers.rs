@@ -1,8 +1,5 @@
-mod file;
-pub(crate) use file::*;
-
-mod tcp;
-pub(crate) use tcp::*;
+pub(super) mod file;
+pub(super) mod tcp;
 
 use kvmi_semantic::address_space::*;
 use kvmi_semantic::event::*;

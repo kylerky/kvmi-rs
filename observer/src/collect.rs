@@ -1,4 +1,5 @@
 mod bp_handlers;
+use bp_handlers::{file, tcp};
 
 use std::collections::HashMap;
 use std::fs::{self, Permissions};
@@ -139,14 +140,13 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
 
     if handler.bps.is_empty() {
         let mut kernel_fns: Vec<(&str, BPHandler)> = vec![
-            // ("NtOpenFile", Box::new(bp_handlers::open_file)),
-            ("NtWriteFile", Box::new(bp_handlers::write_file)),
-            ("NtReadFile", Box::new(bp_handlers::read_file)),
+            ("NtWriteFile", Box::new(file::write)),
+            ("NtReadFile", Box::new(file::read)),
         ];
-        let mut tcp_fns: Vec<(&str, BPHandler)> = vec![(
-            "TcpCreateAndConnectTcbComplete",
-            Box::new(bp_handlers::tcp_receive),
-        )];
+        let mut tcp_fns: Vec<(&str, BPHandler)> = vec![
+            ("TcpTcbSend", Box::new(tcp::send)),
+            ("TcpDeliverReceive", Box::new(tcp::recv)),
+        ];
 
         let dom = &handler.dom;
         let vcpu = event.get_vcpu();

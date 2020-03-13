@@ -17,7 +17,7 @@ use log::error;
 
 use crate::collect::LogChT;
 
-pub(crate) fn tcp_receive<'a>(
+pub(crate) fn send<'a>(
     dom: &'a mut Domain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
@@ -25,18 +25,30 @@ pub(crate) fn tcp_receive<'a>(
     enable_ss: bool,
     orig: u8,
 ) -> BoxFuture<'a, Result<(), Error>> {
-    tcp_receive_(dom, event, extra, log_tx, enable_ss, orig).boxed()
+    handle_tcp(dom, event, extra, log_tx, enable_ss, orig, TcpAccess::Send).boxed()
 }
 
-async fn tcp_receive_(
+pub(crate) fn recv<'a>(
+    dom: &'a mut Domain,
+    event: &'a Event,
+    extra: &'a KvmiEventBreakpoint,
+    log_tx: &'a Sender<LogChT>,
+    enable_ss: bool,
+    orig: u8,
+) -> BoxFuture<'a, Result<(), Error>> {
+    handle_tcp(dom, event, extra, log_tx, enable_ss, orig, TcpAccess::Recv).boxed()
+}
+
+async fn handle_tcp(
     dom: &mut Domain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
+    access: TcpAccess,
 ) -> Result<(), Error> {
-    match handle_tcp_receive(dom, event, extra, log_tx, enable_ss, orig).await {
+    match handle_tcp_(dom, event, extra, log_tx, enable_ss, orig, access).await {
         Ok(()) => Ok(()),
         Err(Error::InvalidVAddr) => dom.resume_from_bp(orig, event, extra, enable_ss).await,
         Err(e) => {
@@ -48,13 +60,14 @@ async fn tcp_receive_(
     }
 }
 
-async fn handle_tcp_receive(
+async fn handle_tcp_(
     dom: &mut Domain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
     log_tx: &Sender<LogChT>,
     enable_ss: bool,
     orig: u8,
+    access: TcpAccess,
 ) -> Result<(), Error> {
     let v_space = dom.get_k_vspace();
 
@@ -78,7 +91,7 @@ async fn handle_tcp_receive(
         let detail = event_log.get_detail();
         let mut tcp = detail.init_tcp();
         tcp.set_address(&format!("{}", addr));
-        tcp.set_access(TcpAccess::Connect);
+        tcp.set_access(access);
     }
 
     log_tx.send(message).await;
