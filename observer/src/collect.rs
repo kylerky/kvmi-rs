@@ -142,6 +142,7 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
         let mut kernel_fns: Vec<(&str, BPHandler)> = vec![
             ("NtWriteFile", Box::new(file::write)),
             ("NtReadFile", Box::new(file::read)),
+            ("NtSetInformationFile", Box::new(file::set_info)),
         ];
         let mut tcp_fns: Vec<(&str, BPHandler)> = vec![
             ("TcpTcbSend", Box::new(tcp::send)),

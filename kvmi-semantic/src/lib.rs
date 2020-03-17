@@ -364,6 +364,9 @@ pub struct RekallProfile {
 
     #[serde(rename(deserialize = "$STRUCTS"))]
     pub structs: HashMap<String, Value>,
+
+    #[serde(rename(deserialize = "$REVENUMS"))]
+    pub rev_enums: HashMap<String, HashMap<String, i32>>,
 }
 
 impl RekallProfile {

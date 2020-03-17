@@ -28,6 +28,7 @@ enum FileAccess {
     write @1;
     exec @2;
     open @3;
+    remove @4;
 }
 
 struct FileEvent {

@@ -126,6 +126,15 @@ fn gen_alert(
                         alerts.push(object);
                     }
                 }
+                EventType::Remove => {
+                    provenance.add_log(subject, object, event);
+
+                    let (subject_entity, object_entity) =
+                        provenance.index_twice_mut(subject, object);
+                    if alarms::write(subject_entity, object_entity) {
+                        alerts.push(object);
+                    }
+                }
                 EventType::Read => {
                     provenance.add_log(object, subject, event);
 

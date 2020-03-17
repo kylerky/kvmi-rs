@@ -29,6 +29,7 @@ pub enum EventType {
     Exec,
     Fork,
     Open,
+    Remove,
 }
 
 #[derive(Debug, Clone)]

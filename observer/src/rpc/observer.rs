@@ -67,6 +67,7 @@ impl consumer::Server<event::Owned> for Consumer {
                         Write => EventType::Write,
                         Exec => EventType::Exec,
                         Open => EventType::Open,
+                        Remove => EventType::Remove,
                     };
                     let graph_event = Event {
                         access,
