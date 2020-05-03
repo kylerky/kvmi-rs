@@ -221,6 +221,10 @@ async fn set_info_(
             dom.resume_from_bp(orig, event, extra, enable_ss).await?;
             Ok(())
         }
+        Err(Error::FromUtf16(_)) => {
+            dom.resume_from_bp(orig, event, extra, enable_ss).await?;
+            Ok(())
+        }
         Err(e) => {
             if let Err(err) = dom.resume_from_bp(orig, event, extra, enable_ss).await {
                 error!("Error resuming from bp: {}", err);

@@ -43,7 +43,7 @@ fn run() -> Result<(), Error> {
 
     env_logger::init();
 
-    let (log_tx, log_rx) = sync::channel(300);
+    let (log_tx, log_rx) = sync::channel(1000);
     let (graph_tx, graph_rx) = sync::channel(10);
     let (_stream_tx, stream_rx) = sync::channel(10);
 

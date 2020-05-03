@@ -92,7 +92,7 @@ where
 
         let fd = self.fd;
 
-        let (event_tx, event_rx) = sync::channel(10);
+        let (event_tx, event_rx) = sync::channel(100);
         let (req_tx, req_rx) = sync::channel(1);
         let (err_tx, err_rx) = sync::channel(1);
         let (shutdown, sd_rx) = sync::channel(1);

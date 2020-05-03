@@ -7,8 +7,11 @@ pub fn read(_subject: &TaggedEntity, _object: &TaggedEntity) -> bool {
 }
 
 pub fn write(subject: &TaggedEntity, object: &TaggedEntity) -> bool {
-    match (subject.ctag, subject.code_ttag, &object.entity) {
-        (ConfidTag::Secret, code, Entity::NetworkEndpoint(_)) if code > TrustTag::BenignAuth => {
+    match (subject.ctag, subject.code_ttag, &object.entity, object.ctag) {
+        (ConfidTag::Secret, code, Entity::NetworkEndpoint(_), _)
+        | (_, code, _, ConfidTag::Secret)
+            if code > TrustTag::BenignAuth =>
+        {
             true
         }
         _ => false,
