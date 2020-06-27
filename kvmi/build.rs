@@ -20,7 +20,7 @@ fn main() -> Result<()> {
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't writing bindings");
 
-    println!("cargo:rerun-if-changed={}", "wrapper.h");
+    println!("cargo:rerun-if-changed=wrapper.h");
     print_dir(Path::new("include"))
 }
 
