@@ -1,3 +1,5 @@
+# VERSION 1.0.1
+
 FROM rust:latest
 RUN set -eux; \
     apt update; \
