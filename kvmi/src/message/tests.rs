@@ -11,7 +11,7 @@ fn get_registers_construct_reply() {
     let msg = GetRegisters::new(0, msrs_idx.clone());
 
     let mut rng = Pcg64Mcg::seed_from_u64(612);
-    let mut expect = kvmi_get_registers_reply::default();
+    let mut expect = kvmi_vcpu_get_registers_reply::default();
     unsafe {
         rng.fill_bytes(any_as_mut_u8_slice(&mut expect));
     }

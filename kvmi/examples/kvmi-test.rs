@@ -136,12 +136,20 @@ async fn handle_event(
                 if started {
                     *pf_test_enabled = true;
                     // disable CR events when the test is started
-                    dom.send(ControlEvent::new(event.get_vcpu(), EventKind::CR, false))
-                        .await?;
+                    dom.send(VcpuControlEvent::new(
+                        event.get_vcpu(),
+                        EventKind::CR,
+                        false,
+                    ))
+                    .await?;
                 }
             } else {
-                dom.send(ControlEvent::new(event.get_vcpu(), EventKind::CR, false))
-                    .await?;
+                dom.send(VcpuControlEvent::new(
+                    event.get_vcpu(),
+                    EventKind::CR,
+                    false,
+                ))
+                .await?;
             }
 
             println!(
@@ -195,8 +203,8 @@ async fn enable_events(dom: &mut Domain, vcpu: u16) -> Result<(), kvmi::Error> {
     use EventKind::*;
 
     println!("enabling page fault and CR events");
-    dom.send(ControlEvent::new(vcpu, PF, true)).await?;
-    dom.send(ControlEvent::new(vcpu, CR, true)).await?;
+    dom.send(VcpuControlEvent::new(vcpu, PF, true)).await?;
+    dom.send(VcpuControlEvent::new(vcpu, CR, true)).await?;
     if vcpu == 0 {
         dom.send(ControlCR::new(vcpu, 3, true)).await?;
     }

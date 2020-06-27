@@ -1,7 +1,9 @@
 use std::env;
-use std::path::PathBuf;
+use std::fs;
+use std::io::Result;
+use std::path::{Path, PathBuf};
 
-fn main() {
+fn main() -> Result<()> {
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
         .clang_arg("-Iinclude")
@@ -17,4 +19,22 @@ fn main() {
     bindings
         .write_to_file(out_path.join("bindings.rs"))
         .expect("Couldn't writing bindings");
+
+    println!("cargo:rerun-if-changed={}", "wrapper.h");
+    print_dir(Path::new("include"))
+}
+
+fn print_dir(dir: &Path) -> Result<()> {
+    if dir.is_dir() {
+        for entry in fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                print_dir(&path)?;
+            } else {
+                println!("cargo:rerun-if-changed={}", path.display());
+            }
+        }
+    }
+    Ok(())
 }

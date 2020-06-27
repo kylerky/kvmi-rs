@@ -32,9 +32,9 @@ use futures::stream::StreamExt;
 mod c_ffi;
 use c_ffi::*;
 pub use c_ffi::{
-    kvm_msr_entry, kvm_regs, kvm_sregs, kvmi_event_arch, kvmi_event_pf, kvmi_get_registers_reply,
-    HSToWire, KvmiEventBreakpoint, KvmiEventCR, KvmiEventPF, KvmiEventSingleStep, PageAccessEntry,
-    PageAccessEntryBuilder,
+    kvm_msr_entry, kvm_regs, kvm_sregs, kvmi_event_arch, kvmi_event_pf,
+    kvmi_vcpu_get_registers_reply, HSToWire, KvmiEventBreakpoint, KvmiEventCR, KvmiEventPF,
+    KvmiEventSingleStep, PageAccessEntry, PageAccessEntryBuilder,
 };
 
 mod utils;
@@ -152,8 +152,14 @@ where
             "Wire data:\n\
              size: {}\n\
              uuid: {:?}\n\
-             padding: {}",
-            from_wire.size, from_wire.uuid, from_wire.padding
+             cpu_type: {}\n\
+             padding: {:?}\n\
+             start_time: {}",
+            from_wire.size,
+            from_wire.uuid,
+            from_wire.cpu_type,
+            from_wire.padding,
+            from_wire.start_time
         );
 
         let rest = (incoming - size) as usize;

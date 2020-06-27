@@ -10,7 +10,8 @@ pub use binding::*;
     clippy::unreadable_literal,
     clippy::useless_transmute,
     clippy::trivially_copy_pass_by_ref,
-    clippy::too_many_arguments
+    clippy::too_many_arguments,
+    clippy::transmute_ptr_to_ptr
 )]
 mod binding {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
@@ -20,7 +21,8 @@ mod binding {
 pub struct HSFromWire {
     pub size: u32,
     pub uuid: [u8; 16],
-    pub padding: u32,
+    pub cpu_type: u8,
+    pub padding: [u8; 3],
     pub start_time: i64,
     pub name: [u8; 64],
 }
@@ -55,25 +57,25 @@ pub struct EventReply {
 pub struct PauseVCPUMsg {
     pub hdr: kvmi_msg_hdr,
     pub vcpu_hdr: kvmi_vcpu_hdr,
-    pub cmd: kvmi_pause_vcpu,
+    pub cmd: kvmi_vcpu_pause,
 }
 
 #[repr(C)]
 pub struct ControlCmdRespMsg {
     pub hdr: kvmi_msg_hdr,
-    pub cmd: kvmi_control_cmd_response,
+    pub cmd: kvmi_vm_control_cmd_response,
 }
 
 #[repr(C)]
-pub struct ControlEventsMsg {
+pub struct VcpuControlEventsMsg {
     pub hdr: kvmi_vcpu_hdr,
-    pub cmd: kvmi_control_events,
+    pub cmd: kvmi_vcpu_control_events,
 }
 
 #[repr(C)]
 pub struct ControlCRMsg {
     pub hdr: kvmi_vcpu_hdr,
-    pub cmd: kvmi_control_cr,
+    pub cmd: kvmi_vcpu_control_cr,
 }
 
 #[derive(Debug)]
@@ -183,7 +185,7 @@ impl PageAccessEntryBuilder {
     }
 }
 
-impl PartialEq for kvmi_get_registers_reply {
+impl PartialEq for kvmi_vcpu_get_registers_reply {
     fn eq(&self, other: &Self) -> bool {
         self.mode == other.mode
             && self.padding == other.padding

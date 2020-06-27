@@ -5,7 +5,7 @@ use crate::memory::address_space::{IA32eVirtual, KVMIPhysical, PhysicalAddrT};
 use crate::Action;
 use crate::{Error, Result};
 
-use kvmi::message::{BPEventReply, SetSingleStep};
+use kvmi::message::{CommonEventReply, ControlSingleStep};
 
 const BP_INSTRUCTION: u8 = 0xcc;
 
@@ -34,9 +34,9 @@ pub(super) async fn resume_from_bp(
     let dom = p_space.get_dom();
     if enable_ss {
         let vcpu = event.get_vcpu();
-        dom.send(SetSingleStep::new(vcpu, true)).await?;
+        dom.send(ControlSingleStep::new(vcpu, true)).await?;
     }
-    let bp_reply = BPEventReply::new(event, Retry, false).ok_or(Error::WrongEvent)?;
+    let bp_reply = CommonEventReply::new(event, Retry).ok_or(Error::WrongEvent)?;
     dom.send(bp_reply).await?;
     Ok(())
 }

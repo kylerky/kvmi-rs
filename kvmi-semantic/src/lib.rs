@@ -20,8 +20,8 @@ use async_std::os::unix::io::AsRawFd;
 use async_std::sync::{Arc, Receiver};
 
 use kvmi::message::{
-    CommonEventReply, ControlEvent, GetRegisters, GetRegistersReply, GetVCPUNum, PFEventReply,
-    PauseVCPUs, SetSingleStep,
+    CommonEventReply, ControlSingleStep, GetRegisters, GetRegistersReply, GetVCPUNum, PFEventReply,
+    PauseVCPUs, VcpuControlEvent,
 };
 use kvmi::DomainBuilder;
 
@@ -207,7 +207,7 @@ impl Domain {
 
     pub async fn toggle_event(&self, vcpu: u16, kind: EventKind, enable: bool) -> Result<()> {
         let dom = self.k_vspace.get_base().get_dom();
-        dom.send(ControlEvent::new(vcpu, kind, enable)).await?;
+        dom.send(VcpuControlEvent::new(vcpu, kind, enable)).await?;
         Ok(())
     }
 
@@ -247,7 +247,7 @@ impl Domain {
 
     pub async fn toggle_single_step(&self, vcpu: u16, enable: bool) -> Result<()> {
         let dom = self.k_vspace.get_base().get_dom();
-        dom.send(SetSingleStep::new(vcpu, enable)).await?;
+        dom.send(ControlSingleStep::new(vcpu, enable)).await?;
         Ok(())
     }
 

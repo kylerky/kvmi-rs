@@ -138,6 +138,12 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
     use Action::*;
     use EventKind::*;
 
+    let dom = &handler.dom;
+    let vcpu = event.get_vcpu();
+    dom.toggle_event(vcpu, Breakpoint, true).await?;
+    dom.toggle_event(vcpu, SingleStep, true).await?;
+    dom.toggle_event(vcpu, PF, true).await?;
+
     if handler.bps.is_empty() {
         let mut kernel_fns: Vec<(&str, BPHandler)> = vec![
             ("NtWriteFile", Box::new(file::write)),
@@ -148,12 +154,6 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
             ("TcpTcbSend", Box::new(tcp::send)),
             ("TcpDeliverReceive", Box::new(tcp::recv)),
         ];
-
-        let dom = &handler.dom;
-        let vcpu = event.get_vcpu();
-        dom.toggle_event(vcpu, Breakpoint, true).await?;
-        dom.toggle_event(vcpu, SingleStep, true).await?;
-        dom.toggle_event(vcpu, PF, true).await?;
 
         let tcpip_base = dom.find_module(TCPIP_SYS).await?;
         debug!("tcpip.sys base: 0x{:x?}", tcpip_base);

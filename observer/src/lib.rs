@@ -1,6 +1,6 @@
 #![recursion_limit = "256"]
 
-#[allow(dead_code)]
+#[allow(dead_code, clippy::redundant_field_names, clippy::match_single_binding)]
 mod kvmi_capnp {
     include!(concat!(env!("OUT_DIR"), "/kvmi_capnp.rs"));
 }

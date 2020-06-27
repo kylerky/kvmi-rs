@@ -51,16 +51,16 @@ impl Messenger for GetMaxGfn {
 impl Msg for GetMaxGfn {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
-        let kind = KVMI_GET_MAX_GFN as u16;
+        let kind = KVMI_VM_GET_MAX_GFN as u16;
         let hdr = get_header(kind, 0, seq);
-        let req_n_rx = get_request(kind, size_of::<kvmi_get_max_gfn_reply>(), seq);
+        let req_n_rx = get_request(kind, size_of::<kvmi_vm_get_max_gfn_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
     fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(io::ErrorKind::BrokenPipe, "Error getting max gfn").into()
     }
     fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
-        let result: Box<kvmi_get_max_gfn_reply> =
+        let result: Box<kvmi_vm_get_max_gfn_reply> =
             unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
         result.gfn
     }
@@ -99,9 +99,9 @@ impl Messenger for GetVCPUNum {
 impl Msg for GetVCPUNum {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
-        let kind = KVMI_GET_GUEST_INFO as u16;
+        let kind = KVMI_VM_GET_INFO as u16;
         let hdr = get_header(kind, 0, seq);
-        let req_n_rx = get_request(kind, size_of::<kvmi_get_guest_info_reply>(), seq);
+        let req_n_rx = get_request(kind, size_of::<kvmi_vm_get_info_reply>(), seq);
         (Some(req_n_rx), vec![hdr.into()])
     }
     fn get_error(&self, _e: Option<Error>) -> Error {
@@ -112,7 +112,7 @@ impl Msg for GetVCPUNum {
         .into()
     }
     fn construct_reply(&self, result: Vec<u8>) -> Self::Reply {
-        let result: Box<kvmi_get_guest_info_reply> =
+        let result: Box<kvmi_vm_get_info_reply> =
             unsafe { boxed_slice_to_type(result.into_boxed_slice()) };
         result.vcpu_count
     }
@@ -128,7 +128,7 @@ pub struct GetRegistersReply {
     data: Box<[u8]>,
 }
 impl GetRegistersReply {
-    pub fn get_regs(&self) -> &kvmi_get_registers_reply {
+    pub fn get_regs(&self) -> &kvmi_vcpu_get_registers_reply {
         unsafe { &*self.data.as_ptr().cast() }
     }
 
@@ -136,12 +136,12 @@ impl GetRegistersReply {
     ///
     /// msrs.nmsrs and msrs.entries should not be mutated.
     /// Otherwise, it will cause undefined behaviours.
-    pub unsafe fn get_regs_mut(&mut self) -> &mut kvmi_get_registers_reply {
+    pub unsafe fn get_regs_mut(&mut self) -> &mut kvmi_vcpu_get_registers_reply {
         &mut *self.data.as_mut_ptr().cast()
     }
 
     pub fn get_msrs(&self) -> &[kvm_msr_entry] {
-        let ptr = self.data.as_ptr().cast::<kvmi_get_registers_reply>();
+        let ptr = self.data.as_ptr().cast::<kvmi_vcpu_get_registers_reply>();
         unsafe {
             let reply = ptr.as_ref().unwrap();
             let nmsrs = reply.msrs.nmsrs as usize;
@@ -152,7 +152,7 @@ impl GetRegistersReply {
 impl Default for GetRegistersReply {
     fn default() -> Self {
         Self {
-            data: vec![0u8; size_of::<kvmi_get_registers_reply>()].into_boxed_slice(),
+            data: vec![0u8; size_of::<kvmi_vcpu_get_registers_reply>()].into_boxed_slice(),
         }
     }
 }
@@ -167,12 +167,13 @@ impl Messenger for GetRegisters {
 }
 impl Msg for GetRegisters {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
-        let kind = KVMI_GET_REGISTERS as u16;
+        let kind = KVMI_VCPU_GET_REGISTERS as u16;
 
         let msrs = self.msrs.take().unwrap();
         let nmsrs = msrs.len();
-        let msg_sz =
-            size_of::<kvmi_vcpu_hdr>() + size_of::<kvmi_get_registers>() + size_of::<u32>() * nmsrs;
+        let msg_sz = size_of::<kvmi_vcpu_hdr>()
+            + size_of::<kvmi_vcpu_get_registers>()
+            + size_of::<u32>() * nmsrs;
         let seq = new_seq();
         let hdr = get_header(kind, msg_sz as u16, seq);
 
@@ -182,7 +183,7 @@ impl Msg for GetRegisters {
             typed.vcpu = self.vcpu;
         }
 
-        let mut reg_msg = VecBuf::<kvmi_get_registers>::new();
+        let mut reg_msg = VecBuf::<kvmi_vcpu_get_registers>::new();
         unsafe {
             let typed = reg_msg.as_mut_type();
             typed.nmsrs = nmsrs as u16;
@@ -192,7 +193,7 @@ impl Msg for GetRegisters {
 
         let req_n_rx = get_request(
             kind,
-            size_of::<kvmi_get_registers_reply>() + nmsrs * size_of::<kvm_msr_entry>(),
+            size_of::<kvmi_vcpu_get_registers_reply>() + nmsrs * size_of::<kvm_msr_entry>(),
             seq,
         );
         (
@@ -204,9 +205,9 @@ impl Msg for GetRegisters {
         io::Error::new(io::ErrorKind::BrokenPipe, "Error getting the registers").into()
     }
     fn construct_reply(&self, mut result: Vec<u8>) -> Self::Reply {
-        let ptr = result.as_ptr().cast::<kvmi_get_registers_reply>();
+        let ptr = result.as_ptr().cast::<kvmi_vcpu_get_registers_reply>();
 
-        let regs_sz = size_of::<kvmi_get_registers_reply>();
+        let regs_sz = size_of::<kvmi_vcpu_get_registers_reply>();
         let data_len = result.len();
         let nmsrs = unsafe { ptr.as_ref().unwrap().msrs.nmsrs as usize };
         let entry_sz = size_of::<kvm_msr_entry>();
@@ -214,7 +215,7 @@ impl Msg for GetRegisters {
         if expected != data_len {
             warn!("Mismatched KVMI_GET_REGISTERS_REPLY\nExpected: {} Received: {}\nThrowing away MSR data", expected, data_len);
             result.resize(regs_sz, 0u8);
-            let ptr = result.as_mut_ptr().cast::<kvmi_get_registers_reply>();
+            let ptr = result.as_mut_ptr().cast::<kvmi_vcpu_get_registers_reply>();
             unsafe {
                 ptr.as_mut().unwrap().msrs.nmsrs = 0;
             }
@@ -243,7 +244,7 @@ impl Messenger for SetRegisters {
 }
 impl Msg for SetRegisters {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
-        let kind = KVMI_SET_REGISTERS as u16;
+        let kind = KVMI_VCPU_SET_REGISTERS as u16;
         let msg_sz = size_of::<kvmi_vcpu_hdr>() + size_of::<kvm_regs>();
         let seq = new_seq();
         let hdr = get_header(kind, msg_sz as u16, seq);
@@ -281,22 +282,22 @@ impl SetRegisters {
 }
 
 #[derive(Debug)]
-pub struct ControlEvent {
+pub struct VcpuControlEvent {
     vcpu: u16,
     event: EventKind,
     enable: bool,
 }
-impl Message for ControlEvent {}
-impl Messenger for ControlEvent {
+impl Message for VcpuControlEvent {}
+impl Messenger for VcpuControlEvent {
     type Reply = ();
 }
-impl Msg for ControlEvent {
+impl Msg for VcpuControlEvent {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
-        let kind = KVMI_CONTROL_EVENTS as u16;
-        let hdr = get_header(kind, size_of::<ControlEventsMsg>() as u16, seq);
+        let kind = KVMI_VCPU_CONTROL_EVENTS as u16;
+        let hdr = get_header(kind, size_of::<VcpuControlEventsMsg>() as u16, seq);
 
-        let mut msg = VecBuf::<ControlEventsMsg>::new();
+        let mut msg = VecBuf::<VcpuControlEventsMsg>::new();
         unsafe {
             let typed = msg.as_mut_type();
             typed.hdr.vcpu = self.vcpu;
@@ -310,13 +311,13 @@ impl Msg for ControlEvent {
     fn get_error(&self, _e: Option<Error>) -> Error {
         io::Error::new(
             io::ErrorKind::BrokenPipe,
-            format!("Error sending ControlEvent command: {:?}", self),
+            format!("Error sending VcpuControlEvent command: {:?}", self),
         )
         .into()
     }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
-impl ControlEvent {
+impl VcpuControlEvent {
     pub fn new(vcpu: u16, event: EventKind, enable: bool) -> Self {
         Self {
             vcpu,
@@ -339,7 +340,7 @@ impl Messenger for ControlCR {
 impl Msg for ControlCR {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
-        let kind = KVMI_CONTROL_CR as u16;
+        let kind = KVMI_VCPU_CONTROL_CR as u16;
         let hdr = get_header(kind, size_of::<ControlCRMsg>() as u16, seq);
 
         let mut msg = VecBuf::<ControlCRMsg>::new();
@@ -384,9 +385,9 @@ impl Msg for PauseVCPUs {
         for i in 0..vcpu_num as usize {
             unsafe {
                 let msg = pause_msgs.nth_as_mut_type(i);
-                msg.hdr.id = KVMI_PAUSE_VCPU as u16;
+                msg.hdr.id = KVMI_VCPU_PAUSE as u16;
                 msg.hdr.seq = new_seq();
-                msg.hdr.size = (size_of::<kvmi_vcpu_hdr>() + size_of::<kvmi_pause_vcpu>()) as u16;
+                msg.hdr.size = (size_of::<kvmi_vcpu_hdr>() + size_of::<kvmi_vcpu_pause>()) as u16;
 
                 msg.vcpu_hdr.vcpu = i as u16;
 
@@ -396,7 +397,7 @@ impl Msg for PauseVCPUs {
 
         let (suffix, seq) = get_control_cmd_response_vec(1, 1);
 
-        let req_n_rx = get_request(KVMI_CONTROL_CMD_RESPONSE as u16, 0, seq);
+        let req_n_rx = get_request(KVMI_VM_CONTROL_CMD_RESPONSE as u16, 0, seq);
         (
             Some(req_n_rx),
             vec![prefix.into(), pause_msgs.into(), suffix.into()],
@@ -419,9 +420,9 @@ fn get_control_cmd_response_vec(enable: u8, now: u8) -> (VecBuf<ControlCmdRespMs
     let mut buf = VecBuf::<ControlCmdRespMsg>::new();
     unsafe {
         let msg = buf.as_mut_type();
-        msg.hdr.id = KVMI_CONTROL_CMD_RESPONSE as u16;
+        msg.hdr.id = KVMI_VM_CONTROL_CMD_RESPONSE as u16;
         msg.hdr.seq = seq;
-        msg.hdr.size = size_of::<kvmi_control_cmd_response>() as u16;
+        msg.hdr.size = size_of::<kvmi_vm_control_cmd_response>() as u16;
         msg.cmd.enable = enable;
         msg.cmd.now = now;
     }
@@ -446,15 +447,16 @@ impl Messenger for SetPageAccess {
 }
 impl Msg for SetPageAccess {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
-        let kind = KVMI_SET_PAGE_ACCESS as u16;
+        let kind = KVMI_VM_SET_PAGE_ACCESS as u16;
         let entries = self.entries.take().unwrap();
         let entries_len = entries.len();
 
-        let msg_sz = size_of::<kvmi_set_page_access>() + entries_len * size_of::<PageAccessEntry>();
+        let msg_sz =
+            size_of::<kvmi_vm_set_page_access>() + entries_len * size_of::<PageAccessEntry>();
         let seq = new_seq();
         let hdr = get_header(kind, msg_sz as u16, seq);
 
-        let mut msg = VecBuf::<kvmi_set_page_access>::new();
+        let mut msg = VecBuf::<kvmi_vm_set_page_access>::new();
         unsafe {
             let typed = msg.as_mut_type();
             typed.count = entries_len as u16;
@@ -680,55 +682,6 @@ impl PFEventReply {
     }
 }
 
-pub struct BPEventReply {
-    common: Option<VecBuf<EventReply>>,
-    bp: Option<VecBuf<kvmi_event_breakpoint_reply>>,
-    seq: u32,
-}
-impl Message for BPEventReply {}
-impl Messenger for BPEventReply {
-    type Reply = ();
-}
-impl Msg for BPEventReply {
-    fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
-        let kind = KVMI_EVENT_REPLY as u16;
-        let sz = (size_of::<EventReply>() + size_of::<kvmi_event_breakpoint_reply>()) as u16;
-        let hdr = get_header(kind, sz, self.seq);
-        (
-            None,
-            vec![
-                hdr.into(),
-                self.common.take().unwrap().into(),
-                self.bp.take().unwrap().into(),
-            ],
-        )
-    }
-    fn get_error(&self, _e: Option<Error>) -> Error {
-        io::Error::new(io::ErrorKind::BrokenPipe, "Error sending BPEventReply").into()
-    }
-    fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
-}
-impl BPEventReply {
-    pub fn new(event: &Event, action: Action, single_step: bool) -> Option<Self> {
-        use EventExtra::*;
-        match event.get_extra() {
-            Breakpoint(_) => (),
-            _ => return None,
-        }
-        let bp = unsafe {
-            let mut bp = VecBuf::<kvmi_event_breakpoint_reply>::new();
-            bp.as_mut_type().singlestep = single_step as u8;
-            bp
-        };
-        let common = get_event_reply_buf(event, action);
-        Some(Self {
-            common: Some(common),
-            bp: Some(bp),
-            seq: event.seq,
-        })
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 pub struct ReadPhysical {
     gpa: u64,
@@ -741,13 +694,13 @@ impl Messenger for ReadPhysical {
 impl Msg for ReadPhysical {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
         let seq = new_seq();
-        let kind = KVMI_READ_PHYSICAL as u16;
-        let hdr = get_header(kind, size_of::<kvmi_read_physical>() as u16, seq);
+        let kind = KVMI_VM_READ_PHYSICAL as u16;
+        let hdr = get_header(kind, size_of::<kvmi_vm_read_physical>() as u16, seq);
         let req_n_rx = get_request(kind, self.size as usize, seq);
 
-        let mut buf = VecBuf::<kvmi_read_physical>::new();
+        let mut buf = VecBuf::<kvmi_vm_read_physical>::new();
         unsafe {
-            *buf.as_mut_type() = kvmi_read_physical {
+            *buf.as_mut_type() = kvmi_vm_read_physical {
                 size: self.size,
                 gpa: self.gpa,
             };
@@ -782,15 +735,15 @@ impl Messenger for WritePhysical {
 }
 impl Msg for WritePhysical {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
-        let kind = KVMI_WRITE_PHYSICAL as u16;
+        let kind = KVMI_VM_WRITE_PHYSICAL as u16;
         let data = self.data.take().unwrap();
         let data_len = data.len();
 
-        let msg_sz = size_of::<kvmi_write_physical>() + data_len;
+        let msg_sz = size_of::<kvmi_vm_write_physical>() + data_len;
         let seq = new_seq();
         let hdr = get_header(kind, msg_sz as u16, seq);
 
-        let mut msg = VecBuf::<kvmi_write_physical>::new();
+        let mut msg = VecBuf::<kvmi_vm_write_physical>::new();
         unsafe {
             let typed = msg.as_mut_type();
             typed.gpa = self.gpa;
@@ -818,23 +771,23 @@ impl WritePhysical {
     }
 }
 
-pub struct SetSingleStep {
+pub struct ControlSingleStep {
     vcpu: u16,
     enable: bool,
 }
-impl Message for SetSingleStep {}
-impl Messenger for SetSingleStep {
+impl Message for ControlSingleStep {}
+impl Messenger for ControlSingleStep {
     type Reply = ();
 }
-impl Msg for SetSingleStep {
+impl Msg for ControlSingleStep {
     fn get_req_info(&mut self) -> (Option<ReqHandle>, Vec<Vec<u8>>) {
-        let kind = KVMI_SET_SINGLESTEP as u16;
-        let msg_sz = size_of::<kvmi_vcpu_hdr>() + size_of::<kvmi_set_singlestep>();
+        let kind = KVMI_VCPU_CONTROL_SINGLESTEP as u16;
+        let msg_sz = size_of::<kvmi_vcpu_hdr>() + size_of::<kvmi_vcpu_control_singlestep>();
         let seq = new_seq();
         let hdr = get_header(kind, msg_sz as u16, seq);
 
         let mut vcpu_msg = VecBuf::<kvmi_vcpu_hdr>::new();
-        let mut ss_msg = VecBuf::<kvmi_set_singlestep>::new();
+        let mut ss_msg = VecBuf::<kvmi_vcpu_control_singlestep>::new();
         unsafe {
             let vcpu = vcpu_msg.as_mut_type();
             vcpu.vcpu = self.vcpu;
@@ -858,7 +811,7 @@ impl Msg for SetSingleStep {
     }
     fn construct_reply(&self, _result: Vec<u8>) -> Self::Reply {}
 }
-impl SetSingleStep {
+impl ControlSingleStep {
     pub fn new(vcpu: u16, enable: bool) -> Self {
         Self { vcpu, enable }
     }
