@@ -1,13 +1,15 @@
-use async_std::os::unix::net::UnixListener;
 use async_std::prelude::*;
 use async_std::sync::Arc;
 use async_std::task;
+
+use smol::Async;
 
 use std::convert::TryInto;
 use std::fs;
 use std::fs::Permissions;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -119,7 +121,7 @@ fn main() -> Result<(), io::Error> {
 }
 
 async fn listen(mut opt: Opt) -> Result<(), io::Error> {
-    let listener = UnixListener::bind(&opt.socket).await?;
+    let listener = Async::<UnixListener>::bind(&opt.socket)?;
     println!("Listening for connections");
 
     fs::set_permissions(&opt.socket, Permissions::from_mode(0o666))?;
@@ -131,7 +133,7 @@ async fn listen(mut opt: Opt) -> Result<(), io::Error> {
         // will not use tcpip_profile
         // so just use REKALL_PROFILE as a place holder
         let tcpip_profile: RekallProfile = serde_json::from_str(REKALL_PROFILE)?;
-        let mut dom = Domain::new(
+        let (mut dom, handle) = Domain::new(
             stream,
             |_, _, _| Some(HSToWire::new()),
             rekall_profile,
@@ -155,7 +157,7 @@ async fn listen(mut opt: Opt) -> Result<(), io::Error> {
 
         let event_rx = dom.get_event_stream().clone();
         let mut bp_set = false;
-        while let Some(event) = event_rx.recv().await {
+        while let Ok(event) = event_rx.recv().await {
             if let Err(e) = handle_event(&mut dom, orig, event, gpa, &mut bp_set).await {
                 clear_bp(&dom, gpa, orig).await;
                 return Err(e.into());
@@ -165,12 +167,13 @@ async fn listen(mut opt: Opt) -> Result<(), io::Error> {
             }
         }
         shutdown(dom, gpa, orig).await?;
+        handle.await;
     }
 
     Ok(())
 }
 
-async fn clear_bp(dom: &Domain, gpa: PhysicalAddrT, orig: u8) {
+async fn clear_bp(dom: &Domain<UnixStream>, gpa: PhysicalAddrT, orig: u8) {
     debug!("Clearing bp");
     let res = dom.clear_bp_by_physical(gpa, orig).await;
     if let Err(err) = res {
@@ -179,7 +182,7 @@ async fn clear_bp(dom: &Domain, gpa: PhysicalAddrT, orig: u8) {
 }
 
 async fn handle_event(
-    dom: &mut Domain,
+    dom: &mut Domain<UnixStream>,
     orig: u8,
     event: Event,
     gpa: u64,
@@ -199,7 +202,7 @@ async fn handle_event(
 }
 
 async fn handle_pause(
-    dom: &Domain,
+    dom: &Domain<UnixStream>,
     event: &Event,
     gpa: u64,
     bp_set: &mut bool,
@@ -223,7 +226,7 @@ async fn handle_pause(
 }
 
 async fn handle_bp(
-    dom: &mut Domain,
+    dom: &mut Domain<UnixStream>,
     orig: u8,
     event: &Event,
     extra: &KvmiEventBreakpoint,
@@ -264,11 +267,19 @@ async fn handle_bp(
     }
 }
 
-async fn handle_pf(dom: &mut Domain, event: &Event, extra: &KvmiEventPF) -> Result<(), Error> {
+async fn handle_pf(
+    dom: &mut Domain<UnixStream>,
+    event: &Event,
+    extra: &KvmiEventPF,
+) -> Result<(), Error> {
     dom.handle_pf(event, extra).await
 }
 
-async fn get_pid(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<u64, Error> {
+async fn get_pid(
+    dom: &mut Domain<UnixStream>,
+    event: &Event,
+    sregs: &kvm_sregs,
+) -> Result<u64, Error> {
     let v_space = dom.get_vspace(kvmi_semantic::get_ptb_from(sregs)).clone();
     let profile = dom.get_profile();
 
@@ -280,7 +291,7 @@ async fn get_pid(dom: &mut Domain, event: &Event, sregs: &kvm_sregs) -> Result<u
 }
 
 async fn get_file_info(
-    dom: &mut Domain,
+    dom: &mut Domain<UnixStream>,
     event: &Event,
     sregs: &kvm_sregs,
 ) -> Result<String, Error> {
@@ -297,7 +308,7 @@ async fn get_file_info(
     let fname_rva = profile.get_struct_field_offset("_OBJECT_ATTRIBUTES", "ObjectName")?;
     let fname_ptr = v_space.read(obj_attr_ptr + fname_rva, 8).await?;
     let fname_ptr = u64::from_ne_bytes(fname_ptr[..].try_into().unwrap());
-    if fname_ptr == 0 || !IA32eVirtual::is_canonical(fname_ptr) {
+    if fname_ptr == 0 || !IA32eVirtual::<UnixStream>::is_canonical(fname_ptr) {
         return Err(Error::InvalidVAddr);
     }
     let fname = memory::read_utf8(&v_space, fname_ptr).await?;
@@ -306,7 +317,7 @@ async fn get_file_info(
 }
 
 async fn handle_ss(
-    dom: &Domain,
+    dom: &Domain<UnixStream>,
     gpa: PhysicalAddrT,
     event: &Event,
     _ss: &KvmiEventSingleStep,
@@ -324,7 +335,7 @@ async fn handle_ss(
     Ok(())
 }
 
-async fn shutdown(mut dom: Domain, gpa: PhysicalAddrT, orig: u8) -> Result<(), Error> {
+async fn shutdown(mut dom: Domain<UnixStream>, gpa: PhysicalAddrT, orig: u8) -> Result<(), Error> {
     use EventExtra::*;
 
     info!("cleaning up");
@@ -334,7 +345,7 @@ async fn shutdown(mut dom: Domain, gpa: PhysicalAddrT, orig: u8) -> Result<(), E
     let vcpu_num = dom.get_vcpu_num().await? as usize;
     debug!("{} vcpus to pause", vcpu_num);
     let mut cnt = 0;
-    while let Some(event) = event_rx.recv().await {
+    while let Ok(event) = event_rx.recv().await {
         let extra = event.get_extra();
         match extra {
             PauseVCPU => {
@@ -358,7 +369,7 @@ async fn shutdown(mut dom: Domain, gpa: PhysicalAddrT, orig: u8) -> Result<(), E
         }
     }
     while !event_rx.is_empty() {
-        if let Some(event) = event_rx.recv().await {
+        if let Ok(event) = event_rx.recv().await {
             let extra = event.get_extra();
             match extra {
                 Breakpoint(bp) => handle_bp(&mut dom, orig, &event, bp, gpa, false).await?,

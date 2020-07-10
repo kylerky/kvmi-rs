@@ -6,14 +6,19 @@ use std::fmt::{self, Display, Formatter};
 use std::fs;
 use std::fs::Permissions;
 use std::io;
+use std::mem;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::io::AsRawFd;
+use std::os::unix::net::UnixListener;
 use std::process;
 
-use async_std::os::unix::net::UnixListener;
 use async_std::prelude::*;
 use async_std::task;
 
+use smol::Async;
+
 use kvmi::message::*;
+use kvmi::net::Stream;
 use kvmi::{
     Action, Domain, DomainBuilder, Event, EventExtra, EventKind, HSToWire, PageAccessEntryBuilder,
 };
@@ -48,9 +53,7 @@ fn run() -> i32 {
 }
 
 async fn listen(path: &str) -> Result<i32, ListenError> {
-    let listener = UnixListener::bind(path)
-        .await
-        .map_err(|e| ListenError::new(Bind, e))?;
+    let listener = Async::<UnixListener>::bind(path).map_err(|e| ListenError::new(Bind, e))?;
     println!("Listening for connections");
 
     fs::set_permissions(path, Permissions::from_mode(0o666))
@@ -60,8 +63,8 @@ async fn listen(path: &str) -> Result<i32, ListenError> {
         println!("Accepted a new connection");
         let stream = stream.map_err(|e| ListenError::new(Accept, e))?;
 
-        let dom = DomainBuilder::new(stream);
-        let (mut dom, mut event_rx) = dom
+        let dom = DomainBuilder::new(Stream::from(stream));
+        let (mut dom, mut event_rx, deserializer) = dom
             .handshake(|_name, _uuid, _start_t| {
                 println!("performing handshake");
                 Some(HSToWire::new())
@@ -91,14 +94,16 @@ async fn listen(path: &str) -> Result<i32, ListenError> {
                 .map_err(|e| ListenError::new(HandleEvent, e))?;
         }
 
+        mem::drop(dom);
+        deserializer.await;
         return Err(ListenError::new(WaitEvent, "event stream broken"));
     }
 
     Ok(exitcode::OK)
 }
 
-async fn handle_event(
-    dom: &mut Domain,
+async fn handle_event<T: AsRawFd>(
+    dom: &mut Domain<T>,
     event: Event,
     pf_test_enabled: &mut bool,
 ) -> Result<(), kvmi::Error> {
@@ -168,7 +173,10 @@ async fn handle_event(
 
 const PAGE_SIZE: u64 = 4096;
 const TEST_PAGE_NUM: u64 = 40;
-async fn start_pf_test(dom: &mut Domain, event: &Event) -> Result<bool, kvmi::Error> {
+async fn start_pf_test<T: AsRawFd>(
+    dom: &mut Domain<T>,
+    event: &Event,
+) -> Result<bool, kvmi::Error> {
     let cr3 = event.get_arch().sregs.cr3;
     let pt_addr = cr3 & !0xfff;
     if pt_addr == 0 {
@@ -187,7 +195,7 @@ async fn start_pf_test(dom: &mut Domain, event: &Event) -> Result<bool, kvmi::Er
     Ok(true)
 }
 
-async fn pause_vm(dom: &mut Domain) -> Result<(), ListenError> {
+async fn pause_vm<T: AsRawFd>(dom: &mut Domain<T>) -> Result<(), ListenError> {
     let num = dom
         .send(GetVCPUNum)
         .await
@@ -199,7 +207,7 @@ async fn pause_vm(dom: &mut Domain) -> Result<(), ListenError> {
     Ok(())
 }
 
-async fn enable_events(dom: &mut Domain, vcpu: u16) -> Result<(), kvmi::Error> {
+async fn enable_events<T: AsRawFd>(dom: &mut Domain<T>, vcpu: u16) -> Result<(), kvmi::Error> {
     use EventKind::*;
 
     println!("enabling page fault and CR events");

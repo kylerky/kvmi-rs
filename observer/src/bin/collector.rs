@@ -1,4 +1,3 @@
-// use std::path::PathBuf;
 use std::io::Error;
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -74,6 +73,7 @@ fn run() -> Result<(), Error> {
         let _tx = sig_tx;
         // wait for the next SIGINT or SIGTERM signal
         signals2.into_iter().next();
+        signals.close();
         // dropping tx should yield a shutdown
     });
 
@@ -100,11 +100,7 @@ fn run() -> Result<(), Error> {
         // keep the sender to prevent rpc from shutting down
         let _tx = collect_sd_tx;
 
-        let mut close_rx2 = close_rx2.fuse();
-        select! {
-            res = collect::listen(kvmi, profile, tcpip_profile, log_tx).fuse() => res,
-            _ = close_rx2.next() => Ok(()),
-        }
+        collect::listen(kvmi, profile, tcpip_profile, log_tx, close_rx2).await
     });
 
     let ret = task::block_on(async move {
@@ -119,10 +115,8 @@ fn run() -> Result<(), Error> {
     });
 
     ret.and(task::block_on(async move {
-        signals.close();
-        sig_handle.await;
-
         close_handle.await;
+        sig_handle.await;
         collect_handle.await
     }))
 }

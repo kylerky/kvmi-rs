@@ -57,7 +57,7 @@ pub async fn construct(
             name: String::new(),
         }),
     );
-    while let Some((subject, event, object)) = log_rx.recv().await {
+    while let Ok((subject, event, object)) = log_rx.recv().await {
         if subject == prev_tuple.0 && object == prev_tuple.2 && event.access == prev_tuple.1.access
         {
             continue;

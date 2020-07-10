@@ -15,15 +15,18 @@ use memory::address_space::{IA32eAddrT, IA32eVirtual, KVMIPhysical, PhysicalAddr
 use memory::process::{self, PSChanT};
 use memory::CR3_MASK;
 
-use async_std::io::prelude::*;
 use async_std::os::unix::io::AsRawFd;
 use async_std::sync::{Arc, Receiver};
+use async_std::task::JoinHandle;
 
 use kvmi::message::{
     CommonEventReply, ControlSingleStep, GetRegisters, GetRegistersReply, GetVCPUNum, PFEventReply,
     PauseVCPUs, VcpuControlEvent,
 };
+use kvmi::net::Stream;
 use kvmi::DomainBuilder;
+
+use smol::Async;
 
 use log::{debug, info};
 
@@ -44,9 +47,9 @@ extern crate lazy_static;
 
 type Result<T> = std::result::Result<T, Error>;
 
-pub struct Domain {
-    k_vspace: IA32eVirtual,
-    vspaces: HashMap<PhysicalAddrT, IA32eVirtual>,
+pub struct Domain<T: 'static> {
+    k_vspace: IA32eVirtual<T>,
+    vspaces: HashMap<PhysicalAddrT, IA32eVirtual<T>>,
     event_rx: Receiver<Event>,
     kernel_base_va: IA32eAddrT,
     profile: RekallProfile,
@@ -76,20 +79,23 @@ const BLINK: &str = "Blink";
 
 const LLP64_ULONG_SZ: usize = 4;
 
-impl Domain {
-    pub async fn new<T, F>(
-        stream: T,
+impl<T> Domain<T>
+where
+    for<'a> &'a T: io::Read,
+    T: Send + Sync + AsRawFd + 'static,
+{
+    pub async fn new<F>(
+        stream: Async<T>,
         validator: F,
         profile: RekallProfile,
         tcpip_profile: RekallProfile,
         ptb: Option<u64>,
-    ) -> Result<Self>
+    ) -> Result<(Self, JoinHandle<()>)>
     where
-        T: Write + Read + Send + AsRawFd + Unpin + 'static,
         F: FnOnce(&str, &[u8], i64) -> Option<HSToWire>,
     {
-        let dom = DomainBuilder::new(stream);
-        let (dom, event_rx) = dom.handshake(validator).await?;
+        let dom = DomainBuilder::new(Stream::new(stream));
+        let (dom, event_rx, handle) = dom.handshake(validator).await?;
 
         let msg = GetRegisters::new(0, vec![IA32_LSTAR, IA32_CSTAR]);
         let reply = dom.send(msg).await?;
@@ -105,7 +111,7 @@ impl Domain {
 
         let p_space = Arc::new(KVMIPhysical::from(dom));
         let (kernel_base_va, _kernel_base_pa, mut k_vspace) =
-            memory::find_kernel_addr(p_space, &reply, &profile).await?;
+            memory::find_kernel_addr::<T>(p_space, &reply, &profile).await?;
 
         if let Some(ptb) = ptb {
             k_vspace.set_ptb(ptb);
@@ -120,14 +126,17 @@ impl Domain {
             .iter()
             .cloned()
             .collect();
-        Ok(Self {
-            k_vspace,
-            vspaces,
-            event_rx,
-            kernel_base_va,
-            profile,
-            tcpip_profile,
-        })
+        Ok((
+            Self {
+                k_vspace,
+                vspaces,
+                event_rx,
+                kernel_base_va,
+                profile,
+                tcpip_profile,
+            },
+            handle,
+        ))
     }
 
     fn get_paging_mode_from(reply: &GetRegistersReply) -> PageMode {
@@ -167,14 +176,14 @@ impl Domain {
     }
 
     async fn print_eprocess(
-        v_space: &IA32eVirtual,
+        v_space: &IA32eVirtual<T>,
         processes: Receiver<PSChanT>,
         profile: &RekallProfile,
     ) -> Result<()> {
         let pid_rva = get_struct_field_offset(profile, EPROCESS, "UniqueProcessId")?;
         // skip the list head
-        processes.recv().await;
-        while let Some(process) = processes.recv().await {
+        processes.recv().await.ok();
+        while let Ok(process) = processes.recv().await {
             let process = process?;
             match v_space.read(process + pid_rva, PTR_SZ).await {
                 Ok(pid) => {
@@ -255,15 +264,15 @@ impl Domain {
         self.kernel_base_va
     }
 
-    pub fn get_k_vspace(&self) -> &IA32eVirtual {
+    pub fn get_k_vspace(&self) -> &IA32eVirtual<T> {
         &self.k_vspace
     }
 
-    pub fn get_vspace(&mut self, ptb: PhysicalAddrT) -> &IA32eVirtual {
+    pub fn get_vspace(&mut self, ptb: PhysicalAddrT) -> &IA32eVirtual<T> {
         let base = self.k_vspace.get_base();
         self.vspaces
             .entry(ptb)
-            .or_insert_with(|| IA32eVirtual::new(Arc::clone(base), ptb))
+            .or_insert_with(|| IA32eVirtual::<T>::new(Arc::clone(base), ptb))
     }
 
     pub fn get_profile(&self) -> &RekallProfile {

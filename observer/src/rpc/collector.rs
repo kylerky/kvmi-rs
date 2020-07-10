@@ -84,13 +84,12 @@ impl publisher::Server<event::Owned> for RpcServer {
             let (sub_tx, sub_rx) = sync::channel(1);
             // notify that a subscription is dropped
             task::spawn(async move {
-                sub_rx.recv().await;
+                sub_rx.recv().await.ok();
                 close_tx.send(()).await;
             });
 
             let subscription = Subscription::new(sub_tx);
-            let subscription =
-                subscription::ToClient::new(subscription).into_client::<capnp_rpc::Server>();
+            let subscription = capnp_rpc::new_client(subscription);
             res.get().set_subscription(subscription);
             Ok(())
         })
@@ -101,7 +100,7 @@ pub async fn listen(addr: &SocketAddr, event_log_rx: Receiver<LogChT>) -> Result
     let listener = TcpListener::bind(addr).await?;
 
     let (rpc_server, consumer_rx, close_rx) = RpcServer::new();
-    let observer = publisher::ToClient::new(rpc_server).into_client::<capnp_rpc::Server>();
+    let observer: publisher::Client<_> = capnp_rpc::new_client(rpc_server);
 
     // start draining the event channel
     let (mut drain_tx, drain_rx) = sync::channel(500);

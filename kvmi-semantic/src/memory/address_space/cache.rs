@@ -7,6 +7,7 @@ use kvmi::PageAccessEntryBuilder;
 use lru::LruCache;
 
 use std::collections::HashMap;
+use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
 
 use crate::Result;
@@ -28,7 +29,12 @@ impl PageCache {
         }
     }
 
-    pub async fn read(&mut self, dom: &Domain, addr: PhysicalAddrT, sz: usize) -> Result<Vec<u8>> {
+    pub async fn read<T: AsRawFd>(
+        &mut self,
+        dom: &Domain<T>,
+        addr: PhysicalAddrT,
+        sz: usize,
+    ) -> Result<Vec<u8>> {
         if sz == 0 {
             return Ok(vec![]);
         }
@@ -64,9 +70,9 @@ impl PageCache {
         }
     }
 
-    async fn read_within_line(
+    async fn read_within_line<T: AsRawFd>(
         &mut self,
-        dom: &Domain,
+        dom: &Domain<T>,
         addr: PhysicalAddrT,
         sz: usize,
     ) -> Result<Vec<u8>> {
@@ -103,7 +109,7 @@ impl PageCache {
         }
     }
 
-    pub async fn remove(&mut self, dom: &Domain, addr: PhysicalAddrT) -> Result<()> {
+    pub async fn remove<T: AsRawFd>(&mut self, dom: &Domain<T>, addr: PhysicalAddrT) -> Result<()> {
         let key = addr & PADDR_KEY;
         if self.pages.pop(&key).is_some() {
             let mut msg = SetPageAccess::new();
@@ -116,7 +122,7 @@ impl PageCache {
         Ok(())
     }
 
-    pub async fn flush(&mut self, _dom: &Domain) -> Result<()> {
+    pub async fn flush<T>(&mut self, _dom: &Domain<T>) -> Result<()> {
         self.pages.clear();
         self.volatile.clear();
         Ok(())

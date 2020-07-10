@@ -5,16 +5,16 @@ authors = ["Jinyi Xian <kylerky@live.com>"]
 edition = "2018"
 
 [build-dependencies]
-bindgen = "0.52"
+bindgen = "0.54"
 
 [dependencies]
-nix = "0.16"
+nix = "0.17"
 exitcode = "1.1"
 log = "0.4"
-mio = "0.6"
 libc = "0.2"
-async-std = { git = "https://github.com/async-rs/async-std", branch = "new-scheduler", features = ["unstable"] }
+async-std = { version = "1.6", features = ["unstable"] }
 futures = "0.3"
+smol = "0.1"
 
 [dev-dependencies]
 env_logger = "0.7"

@@ -4,14 +4,15 @@ use bp_handlers::{file, tcp};
 use std::collections::HashMap;
 use std::fs::{self, Permissions};
 use std::io;
+use std::mem;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use async_std::os::unix::net::UnixListener;
-use async_std::prelude::*;
-use async_std::sync::Sender;
-use async_std::task;
+use async_std::sync::{Receiver, Sender};
+
+use smol::Async;
 
 use log::{debug, error, info};
 
@@ -22,13 +23,17 @@ use kvmi_semantic::{Action, Domain, Error, HSToWire, RekallProfile};
 use capnp::message::HeapAllocator;
 
 use futures::future::BoxFuture;
+use futures::select;
+use futures::stream::StreamExt;
 
 const CPL_MASK: u16 = 3;
 const TCPIP_SYS: &str = "tcpip.sys";
 
+type UnixDomain = Domain<UnixStream>;
+
 type BPHandler = Box<
     dyn for<'a> Fn(
-            &'a mut Domain,
+            &'a mut UnixDomain,
             &'a Event,
             &'a KvmiEventBreakpoint,
             &'a Sender<LogChT>,
@@ -39,14 +44,14 @@ type BPHandler = Box<
         + Send,
 >;
 
-struct EventHandler<'a> {
-    dom: &'a mut Domain,
+struct EventHandler {
+    dom: UnixDomain,
     log_tx: Sender<LogChT>,
     bps: HashMap<PhysicalAddrT, (u8, BPHandler)>,
     vcpu_gpa: HashMap<u16, PhysicalAddrT>,
 }
-impl<'a> EventHandler<'a> {
-    fn new(dom: &'a mut Domain, log_tx: Sender<LogChT>) -> Self {
+impl EventHandler {
+    fn new(dom: UnixDomain, log_tx: Sender<LogChT>) -> Self {
         EventHandler {
             dom,
             log_tx,
@@ -90,15 +95,6 @@ impl<'a> EventHandler<'a> {
         Ok(())
     }
 }
-impl<'a> Drop for EventHandler<'a> {
-    fn drop(&mut self) {
-        if let Err(e) = task::block_on(async_std::io::timeout(Duration::from_secs(5), async {
-            shutdown(self).await.map_err(|e| e.into())
-        })) {
-            error!("Error shutting down: {}", e);
-        }
-    }
-}
 
 pub(crate) type LogChT = capnp::message::Builder<HeapAllocator>;
 pub async fn listen(
@@ -106,35 +102,65 @@ pub async fn listen(
     profile: RekallProfile,
     tcpip_profile: RekallProfile,
     log_tx: Sender<LogChT>,
+    close: Receiver<()>,
 ) -> Result<(), io::Error> {
-    let listener = UnixListener::bind(&addr).await?;
+    let listener = Async::<UnixListener>::bind(&addr)?;
     info!("Listening for KVMI connection");
 
     fs::set_permissions(&addr, Permissions::from_mode(0o666))?;
-    if let Some(stream) = listener.incoming().next().await {
-        info!("Accepted a new connection");
-        let stream = stream?;
+    let mut close = close.fuse();
+    let mut incoming = listener.incoming().fuse();
+    let (event_rx, mut handler, join_handle) = select! {
+        _ = close.next() => return Ok(()),
+        res = incoming.next() => {
+            match res {
+                None => return Ok(()),
+                Some(stream) => {
+                    info!("Accepted a new connection");
+                    let stream = stream?;
 
-        let mut dom = Domain::new(
-            stream,
-            |_, _, _| Some(HSToWire::new()),
-            profile,
-            tcpip_profile,
-            None,
-        )
-        .await?;
+                    let (dom, handle) = UnixDomain::new(
+                        stream,
+                        |_, _, _| Some(HSToWire::new()),
+                        profile,
+                        tcpip_profile,
+                        None,
+                    )
+                    .await?;
 
-        dom.pause_vm().await?;
-        let event_rx = dom.get_event_stream().clone();
-        let mut handler = EventHandler::new(&mut dom, log_tx);
-        while let Some(event) = event_rx.recv().await {
-            handler.handle_event(event).await?;
+                    dom.pause_vm().await?;
+                    let event_rx = dom.get_event_stream().clone();
+                    let handler = EventHandler::new(dom, log_tx);
+                    (event_rx, handler, handle)
+                }
+            }
+        }
+    };
+    let mut event_rx = event_rx.fuse();
+    loop {
+        select! {
+            res = event_rx.next() => {
+                match res {
+                    None => return Ok(()),
+                    Some(event) => {
+                        handler.handle_event(event).await?
+                    }
+                }
+            }
+            _ = close.next() => {
+                let res = async_std::io::timeout(Duration::from_secs(5), async {
+                    shutdown(&mut handler).await.map_err(|e| e.into())
+                })
+                .await;
+                mem::drop(handler);
+                join_handle.await;
+                return res;
+            },
         }
     }
-    Ok(())
 }
 
-async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(), Error> {
+async fn handle_pause(handler: &mut EventHandler, event: &Event) -> Result<(), Error> {
     use Action::*;
     use EventKind::*;
 
@@ -181,7 +207,7 @@ async fn handle_pause(handler: &mut EventHandler<'_>, event: &Event) -> Result<(
 }
 
 async fn handle_bp(
-    handler: &mut EventHandler<'_>,
+    handler: &mut EventHandler,
     event: &Event,
     extra: &KvmiEventBreakpoint,
     enable_ss: bool,
@@ -212,7 +238,7 @@ async fn handle_bp(
 }
 
 async fn handle_ss(
-    handler: &mut EventHandler<'_>,
+    handler: &mut EventHandler,
     event: &Event,
     _ss: &KvmiEventSingleStep,
     restore: bool,
@@ -235,7 +261,7 @@ async fn handle_ss(
 }
 
 async fn handle_pf(
-    handler: &EventHandler<'_>,
+    handler: &EventHandler,
     event: &Event,
     extra: &KvmiEventPF,
 ) -> Result<(), Error> {
@@ -243,13 +269,14 @@ async fn handle_pf(
     dom.handle_pf(event, extra).await
 }
 
-async fn shutdown(handler: &mut EventHandler<'_>) -> Result<(), Error> {
+async fn shutdown(handler: &mut EventHandler) -> Result<(), Error> {
     use EventExtra::*;
 
     info!("cleaning up");
     if let Err(e) = handler.drain_bps().await {
         error!("Error clearing bp: {}", e);
     }
+    debug!("breakpoitns cleared");
 
     let dom = &mut handler.dom;
     let vcpu_num = dom.get_vcpu_num().await? as usize;
@@ -258,10 +285,11 @@ async fn shutdown(handler: &mut EventHandler<'_>) -> Result<(), Error> {
         dom.toggle_event(vcpu, EventKind::SingleStep, false).await?;
         dom.toggle_event(vcpu, EventKind::PF, false).await?;
     }
+    debug!("unsubscribed");
 
     let event_rx = dom.get_event_stream().clone();
     while !event_rx.is_empty() {
-        if let Some(event) = event_rx.recv().await {
+        if let Ok(event) = event_rx.recv().await {
             let extra = event.get_extra();
             match extra {
                 Breakpoint(bp) => handle_bp(handler, &event, bp, false).await?,
@@ -271,5 +299,6 @@ async fn shutdown(handler: &mut EventHandler<'_>) -> Result<(), Error> {
             }
         }
     }
+    debug!("events drained");
     Ok(())
 }

@@ -11,14 +11,16 @@ use crate::Error;
 use kvmi::message::{Message, ReadPhysical, SetPageAccess};
 use kvmi::PageAccessEntryBuilder;
 
+use std::os::unix::net::UnixStream;
+
 use pretty_assertions::assert_eq;
 
 type AddressType = u64;
 
 mock! {
-    pub KVMIPhysical {
-        fn new(dom: kvmi::Domain) -> Self;
-        fn get_dom(&self) -> &kvmi::Domain;
+    pub KVMIPhysical<T: 'static> {
+        fn new(dom: kvmi::Domain<T>) -> Self;
+        fn get_dom(&self) -> &kvmi::Domain<T>;
         async fn read(&self, addr: AddressType, sz: usize) -> Result<Vec<u8>, Error>;
         async fn write(&self, addr: AddressType, data: Vec<u8>) -> Result<(), Error>;
         async fn evict(&self, addr: AddressType) -> Result<(), Error>;
@@ -29,7 +31,7 @@ mock! {
             offset: usize,
             sz: usize,
         ) -> Result<Vec<u8>, Error>;
-        fn from(dom: kvmi::Domain) -> Self;
+        fn from(dom: kvmi::Domain<T>) -> Self;
     }
     trait AddressSpace {
         type AddrT = AddressType;
@@ -37,8 +39,8 @@ mock! {
 }
 
 mock! {
-    pub Domain {
-        async fn send<T: Message + 'static>(&self, mut msg: T) -> Result<T::Reply, Error>;
+    pub Domain<T: 'static> {
+        async fn send<M: Message + 'static>(&self, mut msg: M) -> Result<M::Reply, Error>;
     }
 }
 
@@ -54,7 +56,7 @@ async fn ia32e_translation_l2() {
     let v_addr = 0xffff_a18f_8076_5540u64;
 
     let mut seq = Sequence::new();
-    let mut p_space = MockKVMIPhysical::default();
+    let mut p_space = MockKVMIPhysical::<UnixStream>::default();
 
     let mut expect = |lx_entry, ptbpt, level| {
         let mut entry = vec![];
@@ -97,7 +99,7 @@ async fn read_direct() {
     let offset = addr & PADDR_OFFSET;
     let sz = 8;
 
-    let mut dom = MockDomain::default();
+    let mut dom = MockDomain::<UnixStream>::default();
 
     let mut msg = SetPageAccess::new();
     let mut builder = PageAccessEntryBuilder::new(key);
@@ -144,7 +146,7 @@ async fn read_across_1() {
     let sz = 16;
     let split_sz = 10;
 
-    let mut dom = MockDomain::default();
+    let mut dom = MockDomain::<UnixStream>::default();
 
     let mut msg = SetPageAccess::new();
     let mut builder = PageAccessEntryBuilder::new(key);
@@ -216,7 +218,7 @@ async fn read_across_2() {
     let sz = 16 + PHYSICAL_PAGE_SZ;
     let split_sz = 10;
 
-    let mut dom = MockDomain::default();
+    let mut dom = MockDomain::<UnixStream>::default();
 
     let mut msg = SetPageAccess::new();
     let mut builder = PageAccessEntryBuilder::new(key);
@@ -297,7 +299,7 @@ async fn read_across_2() {
     for (i, elt) in expect.iter_mut().enumerate() {
         *elt = (i + 1) as u8;
     }
-    let p_space = KVMIPhysical::new(dom);
+    let p_space = KVMIPhysical::<UnixStream>::new(dom);
     assert_eq!(
         expect,
         p_space.read(addr, sz).await.expect("Unexpcted error")

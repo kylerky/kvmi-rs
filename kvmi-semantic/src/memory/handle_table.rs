@@ -2,6 +2,7 @@ use crate::memory::address_space::{IA32eAddrT, IA32eVirtual};
 use crate::{Error, RekallProfile, Result, PAGE_SHIFT, PTR_SZ};
 
 use std::convert::TryInto;
+use std::os::unix::io::AsRawFd;
 
 const PTR_SHIFT: u32 = PTR_SZ.trailing_zeros();
 const HANDLE_STEP: u32 = 4;
@@ -13,8 +14,8 @@ const OBJECT_PTR_RSHIFT: u32 = 20;
 const OBJECT_PTR_LSHIFT: u32 = 4;
 const OBJECT_PTR_PREFIX: IA32eAddrT = 0xffff_0000_0000_0000;
 
-pub async fn get_obj_by(
-    v_space: &IA32eVirtual,
+pub async fn get_obj_by<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     handle: u64,
     process: IA32eAddrT,
     profile: &RekallProfile,
@@ -27,8 +28,8 @@ pub async fn get_obj_by(
     find_obj(v_space, table_ptr, handle, level, handle_entry_shift).await
 }
 
-async fn find_obj(
-    v_space: &IA32eVirtual,
+async fn find_obj<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     mut table_ptr: IA32eAddrT,
     handle: u64,
     mut level: u64,
@@ -79,8 +80,8 @@ async fn find_obj(
     }
 }
 
-async fn get_handle_table_from(
-    v_space: &IA32eVirtual,
+async fn get_handle_table_from<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     process: IA32eAddrT,
     profile: &RekallProfile,
 ) -> Result<(IA32eAddrT, u64)> {

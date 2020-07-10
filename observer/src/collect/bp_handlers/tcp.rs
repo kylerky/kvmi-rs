@@ -1,13 +1,14 @@
 use kvmi_semantic::event::*;
 use kvmi_semantic::memory::address_space::*;
 use kvmi_semantic::tracing::functions::MSx64;
-use kvmi_semantic::{Domain, Error};
+use kvmi_semantic::Error;
 
 use crate::kvmi_capnp::event;
 use crate::kvmi_capnp::TcpAccess;
 
 use std::convert::TryInto;
 use std::net::Ipv4Addr;
+use std::os::unix::io::AsRawFd;
 
 use async_std::sync::Sender;
 
@@ -15,10 +16,10 @@ use futures::future::{BoxFuture, FutureExt};
 
 use log::error;
 
-use crate::collect::LogChT;
+use crate::collect::{LogChT, UnixDomain};
 
 pub(crate) fn send<'a>(
-    dom: &'a mut Domain,
+    dom: &'a mut UnixDomain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
     log_tx: &'a Sender<LogChT>,
@@ -29,7 +30,7 @@ pub(crate) fn send<'a>(
 }
 
 pub(crate) fn recv<'a>(
-    dom: &'a mut Domain,
+    dom: &'a mut UnixDomain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
     log_tx: &'a Sender<LogChT>,
@@ -40,7 +41,7 @@ pub(crate) fn recv<'a>(
 }
 
 async fn handle_tcp(
-    dom: &mut Domain,
+    dom: &mut UnixDomain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
     log_tx: &Sender<LogChT>,
@@ -61,7 +62,7 @@ async fn handle_tcp(
 }
 
 async fn handle_tcp_(
-    dom: &mut Domain,
+    dom: &mut UnixDomain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
     log_tx: &Sender<LogChT>,
@@ -98,7 +99,7 @@ async fn handle_tcp_(
     Ok(())
 }
 
-async fn get_ip(v_space: &IA32eVirtual, regs: &kvm_regs) -> Result<Ipv4Addr, Error> {
+async fn get_ip<T: AsRawFd>(v_space: &IA32eVirtual<T>, regs: &kvm_regs) -> Result<Ipv4Addr, Error> {
     let args = MSx64::new(&v_space, regs, 1).await?;
 
     let p_tcp_end = args.get(0).unwrap();

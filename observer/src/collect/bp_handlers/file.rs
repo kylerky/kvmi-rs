@@ -2,7 +2,7 @@ use kvmi_semantic::event::*;
 use kvmi_semantic::memory::address_space::{IA32eAddrT, IA32eVirtual};
 use kvmi_semantic::memory::{self, handle_table};
 use kvmi_semantic::tracing::functions::MSx64;
-use kvmi_semantic::{Domain, Error, RekallProfile};
+use kvmi_semantic::{Error, RekallProfile};
 
 use crate::kvmi_capnp::event;
 use crate::kvmi_capnp::FileAccess;
@@ -10,12 +10,13 @@ use crate::kvmi_capnp::FileAccess;
 use futures::future::{BoxFuture, FutureExt};
 
 use std::convert::TryInto;
+use std::os::unix::io::AsRawFd;
 
 use log::error;
 
 use async_std::sync::Sender;
 
-use crate::collect::LogChT;
+use crate::collect::{LogChT, UnixDomain};
 
 const FILE_INFORMATION_CLASS: &str = "_FILE_INFORMATION_CLASS";
 const DISPOSITION_INFO: &str = "FileDispositionInformation";
@@ -28,7 +29,7 @@ struct SetInfoParams {
 }
 
 pub(crate) fn read<'a>(
-    dom: &'a mut Domain,
+    dom: &'a mut UnixDomain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
     log_tx: &'a Sender<LogChT>,
@@ -39,7 +40,7 @@ pub(crate) fn read<'a>(
 }
 
 async fn read_file(
-    dom: &mut Domain,
+    dom: &mut UnixDomain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
     log_tx: &Sender<LogChT>,
@@ -50,7 +51,7 @@ async fn read_file(
 }
 
 pub(crate) fn write<'a>(
-    dom: &'a mut Domain,
+    dom: &'a mut UnixDomain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
     log_tx: &'a Sender<LogChT>,
@@ -61,7 +62,7 @@ pub(crate) fn write<'a>(
 }
 
 async fn write_file(
-    dom: &mut Domain,
+    dom: &mut UnixDomain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
     log_tx: &Sender<LogChT>,
@@ -81,7 +82,7 @@ async fn write_file(
 }
 
 async fn handle_rw(
-    dom: &mut Domain,
+    dom: &mut UnixDomain,
     access: FileAccess,
     event: &Event,
     extra: &KvmiEventBreakpoint,
@@ -109,7 +110,7 @@ async fn handle_rw(
 }
 
 async fn handle_rw_(
-    dom: &mut Domain,
+    dom: &mut UnixDomain,
     access: FileAccess,
     event: &Event,
     extra: &KvmiEventBreakpoint,
@@ -150,7 +151,7 @@ async fn handle_rw_(
 }
 
 pub(crate) fn set_info<'a>(
-    dom: &'a mut Domain,
+    dom: &'a mut UnixDomain,
     event: &'a Event,
     extra: &'a KvmiEventBreakpoint,
     log_tx: &'a Sender<LogChT>,
@@ -161,7 +162,7 @@ pub(crate) fn set_info<'a>(
 }
 
 async fn set_info_(
-    dom: &mut Domain,
+    dom: &mut UnixDomain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
     log_tx: &Sender<LogChT>,
@@ -235,7 +236,7 @@ async fn set_info_(
 }
 
 async fn handle_rm(
-    dom: &mut Domain,
+    dom: &mut UnixDomain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
     log_tx: &Sender<LogChT>,
@@ -272,7 +273,7 @@ async fn handle_rm(
 }
 
 async fn handle_mv(
-    dom: &mut Domain,
+    dom: &mut UnixDomain,
     event: &Event,
     extra: &KvmiEventBreakpoint,
     log_tx: &Sender<LogChT>,
@@ -363,8 +364,8 @@ async fn handle_mv(
     Ok(())
 }
 
-async fn get_root_dir(
-    v_space: &IA32eVirtual,
+async fn get_root_dir<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     process: IA32eAddrT,
     handle: u64,
     profile: &RekallProfile,

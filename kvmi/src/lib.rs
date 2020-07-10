@@ -4,26 +4,19 @@ use std::error;
 use std::ffi::{CStr, FromBytesWithNulError};
 use std::fmt::{self, Display, Formatter};
 use std::io;
-use std::marker::Unpin;
 use std::mem::{self, size_of, transmute};
 use std::str::Utf8Error;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
 
 use async_std::io::prelude::*;
 use async_std::io::BufReader;
-use async_std::os::unix::io::{AsRawFd, RawFd};
+use async_std::os::unix::io::AsRawFd;
 use async_std::sync::{self, Mutex, Receiver, Sender};
 use async_std::task::{self, JoinHandle};
 
 use log::{debug, error};
 
-use nix::errno::Errno;
-use nix::sys::socket::{self, MsgFlags};
-use nix::sys::uio::IoVec;
-
-use mio::unix::{EventedFd, UnixReady};
-use mio::{Events, Poll, PollOpt, Ready, Token};
+use nix::sys::socket::MsgFlags;
 
 use futures::future::FutureExt;
 use futures::select;
@@ -42,6 +35,9 @@ use utils::*;
 
 pub mod message;
 use message::*;
+
+pub mod net;
+use net::Stream;
 
 type MsgHeader = kvmi_msg_hdr;
 type ErrorCode = kvmi_error_code;
@@ -65,37 +61,34 @@ pub enum EventKind {
 }
 
 pub struct DomainBuilder<T> {
-    reader: BufReader<T>,
-    fd: RawFd,
+    stream: Stream<T>,
 }
 
 impl<T> DomainBuilder<T>
 where
-    T: Write + Read + Send + AsRawFd + Unpin + 'static,
+    for<'a> &'a T: io::Read,
+    T: Send + Sync + AsRawFd + 'static,
 {
-    pub fn new(stream: T) -> Self {
-        let fd = stream.as_raw_fd();
-        Self {
-            reader: BufReader::new(stream),
-            fd,
-        }
+    pub fn new(stream: Stream<T>) -> Self {
+        Self { stream }
     }
 
     const MIN_HS_DATA: u32 = (size_of::<HSFromWire>() - size_of::<[u8; 64]>()) as u32;
     const MAX_HS_DATA: u32 = 64 * 1024;
-    pub async fn handshake<F>(self, validate: F) -> Result<(Domain, Receiver<Event>)>
+    pub async fn handshake<F>(
+        self,
+        validate: F,
+    ) -> Result<(Domain<T>, Receiver<Event>, JoinHandle<()>)>
     where
         F: FnOnce(&str, &[u8], i64) -> Option<HSToWire>,
     {
-        let mut reader = self.reader;
+        let mut reader = BufReader::new(self.stream.clone());
         let (name, uuid, start_time) = Self::read_handshake_data(&mut reader).await?;
-
-        let fd = self.fd;
 
         let (event_tx, event_rx) = sync::channel(100);
         let (req_tx, req_rx) = sync::channel(1);
         let (err_tx, err_rx) = sync::channel(1);
-        let (shutdown, sd_rx) = sync::channel(1);
+        let (_shutdown, sd_rx) = sync::channel(1);
         let deserializer = task::spawn(Self::deserializer(reader, event_tx, req_rx, err_tx, sd_rx));
 
         let to_wire = match validate(&name, &uuid[..], start_time) {
@@ -104,22 +97,25 @@ where
         };
         let to_wire_slice = unsafe { any_as_u8_slice(&to_wire) };
         let io_vec = vec![to_wire_slice.to_vec()];
-        Domain::request(fd, io_vec).await?;
+        Domain::request(&self.stream, io_vec).await?;
 
         Ok((
             Domain {
                 name,
                 uuid,
                 start_time,
-                req_handle: Mutex::new(ReqHandle { fd, req_tx }),
+                req_tx: Mutex::new(req_tx),
                 err_rx,
-                shutdown: Some(shutdown),
-                deserializer: Some(deserializer),
+                _shutdown,
+                stream: self.stream,
             },
             event_rx,
+            deserializer,
         ))
     }
-    async fn read_handshake_data(reader: &mut BufReader<T>) -> Result<(String, [u8; 16], i64)> {
+    async fn read_handshake_data(
+        reader: &mut BufReader<Stream<T>>,
+    ) -> Result<(String, [u8; 16], i64)> {
         let mut buffer = [0u8; size_of::<HSFromWire>()];
         const SIZE_SZ: usize = size_of::<u32>();
 
@@ -183,7 +179,7 @@ where
     }
 
     async fn deserializer(
-        reader: BufReader<T>,
+        reader: BufReader<Stream<T>>,
         event_tx: Sender<Event>,
         req_rx: Receiver<Request>,
         err_tx: Sender<Error>,
@@ -198,10 +194,11 @@ where
 
             _ = sd_rx.next() => (),
         };
+        debug!("deserializer going out");
     }
 
     async fn deserializer_inner(
-        mut reader: BufReader<T>,
+        mut reader: BufReader<Stream<T>>,
         event_tx: Sender<Event>,
         req_rx: Receiver<Request>,
     ) -> Result<()> {
@@ -215,18 +212,20 @@ where
     }
 
     async fn recv_reply(
-        mut reader: &mut BufReader<T>,
+        mut reader: &mut BufReader<Stream<T>>,
         req_rx: &Receiver<Request>,
         header: MsgHeader,
     ) -> Result<()> {
         let req = match req_rx.recv().await {
-            None => {
-                error!("Unexpected closure of the request channel");
-                return Err(
-                    io::Error::new(io::ErrorKind::UnexpectedEof, "cannot get requests").into(),
-                );
+            Ok(r) => r,
+            Err(_) => {
+                error!("deserializer: unable to receive request");
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "Deserializer cannot receive request",
+                )
+                .into());
             }
-            Some(req) => req,
         };
 
         if req.kind != header.id || req.seq != header.seq {
@@ -251,7 +250,7 @@ where
 
     const KVMI_MSG_SZ: usize = 4096 - 8;
     async fn recv_event(
-        reader: &mut BufReader<T>,
+        reader: &mut BufReader<Stream<T>>,
         event_tx: &Sender<Event>,
         header: MsgHeader,
     ) -> Result<()> {
@@ -348,7 +347,7 @@ where
         Ok(extra)
     }
 
-    async fn recv_header(reader: &mut BufReader<T>) -> Result<MsgHeader> {
+    async fn recv_header(reader: &mut BufReader<Stream<T>>) -> Result<MsgHeader> {
         let header: MsgHeader = {
             let mut buffer = [0u8; size_of::<MsgHeader>()];
             reader.read_exact(&mut buffer[..]).await?;
@@ -359,7 +358,7 @@ where
         Ok(header)
     }
 
-    async fn recv_error_code(reader: &mut BufReader<T>, size: u16) -> Result<u16> {
+    async fn recv_error_code(reader: &mut BufReader<Stream<T>>, size: u16) -> Result<u16> {
         if size < (size_of::<ErrorCode>() as u16) {
             return Err(io::Error::from_raw_os_error(libc::ENODATA).into());
         }
@@ -375,7 +374,7 @@ where
     }
 
     async fn recv_reply_data(
-        reader: &mut BufReader<T>,
+        reader: &mut BufReader<Stream<T>>,
         size: u16,
         type_size: usize,
     ) -> Result<(Vec<u8>, usize)> {
@@ -387,7 +386,7 @@ where
         Ok((buffer, actual_sz))
     }
 
-    async fn consume_bytes(reader: &mut BufReader<T>, nbytes: usize) -> Result<()> {
+    async fn consume_bytes(reader: &mut BufReader<Stream<T>>, nbytes: usize) -> Result<()> {
         let mut redundant = vec![];
         redundant.resize(nbytes as usize, 0u8);
         reader.read_exact(&mut redundant).await?;
@@ -395,122 +394,51 @@ where
     }
 }
 
-pub struct Domain {
+pub struct Domain<T> {
     uuid: [u8; 16],
     start_time: i64,
     name: String,
-    req_handle: Mutex<ReqHandle>,
+    req_tx: Mutex<Sender<Request>>,
     err_rx: Receiver<Error>,
-    shutdown: Option<Sender<()>>,
-    deserializer: Option<JoinHandle<()>>,
+    _shutdown: Sender<()>,
+    stream: Stream<T>,
 }
 
-struct ReqHandle {
-    fd: RawFd,
-    req_tx: Sender<Request>,
-}
-
-impl Drop for Domain {
-    fn drop(&mut self) {
-        task::block_on(self.close());
-    }
-}
-
-impl Domain {
-    const KVMI_TIMEOUT: Duration = Duration::from_millis(15_000);
-    async fn request(fd: RawFd, vec: Vec<Vec<u8>>) -> Result<()> {
-        let io_vec: Vec<IoVec<&[u8]>> = vec.iter().map(|i| IoVec::from_slice(&i[..])).collect();
-        Self::send_msg(fd, &io_vec[..], Some(Self::KVMI_TIMEOUT))
-    }
-    fn send_msg(fd: RawFd, io_vec: &[IoVec<&[u8]>], timeout: Option<Duration>) -> Result<()> {
-        // let flags = match MsgFlags::from_bits(libc::MSG_NOSIGNAL) {
-        //     Some(f) => f,
-        //     None => return Err(Error::from(ErrorKind::FlagNSig)),
-        // };
-        let flags = MsgFlags::empty();
-
-        loop {
-            match socket::sendmsg(fd, io_vec, &[], flags, None) {
-                Ok(_) => return Ok(()),
-                // wait and try again
-                Err(nix::Error::Sys(Errno::EAGAIN)) => (),
-                Err(e) => {
-                    error!("error sending message through the socket: {:?}", e);
-                    return Err(e.into());
-                }
-            }
-
-            Self::io_ready_await(fd, Ready::writable(), timeout)?;
-        }
+impl<T: AsRawFd> Domain<T> {
+    async fn request(s: &Stream<T>, vec: Vec<Vec<u8>>) -> Result<()> {
+        s.sendmsg(vec, &[], MsgFlags::empty(), None)
+            .await
+            .map(|_| ())
     }
 
-    fn io_ready_await(fd: RawFd, interest: Ready, timeout: Option<Duration>) -> Result<()> {
-        debug!("waiting for socket to be writable");
-        let poll = Poll::new()?;
-        poll.register(
-            &EventedFd(&fd),
-            Token(0),
-            interest | UnixReady::hup(),
-            PollOpt::empty(),
-        )?;
-
-        let mut events = Events::with_capacity(10);
-        poll.poll(&mut events, timeout)?;
-        if events.is_empty() {
-            // timeout
-            return Err(io::Error::from(io::ErrorKind::TimedOut).into());
-        }
-
-        for event in &events {
-            if event.token() == Token(0) {
-                let readiness: UnixReady = event.readiness().into();
-                if readiness.is_hup() {
-                    error!("socket hung up");
-                    return Err(io::Error::from(io::ErrorKind::BrokenPipe).into());
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    pub async fn send<T>(&self, mut msg: T) -> Result<T::Reply>
-    where
-        T: Message,
-    {
+    pub async fn send<M: Message>(&self, mut msg: M) -> Result<M::Reply> {
         let (req_n_rx, iov) = msg.get_req_info();
-        let handle = self.req_handle.lock().await;
+        let req_tx = self.req_tx.lock().await;
         let result = match req_n_rx {
             Some((req, rx)) => {
-                let req_tx = &handle.req_tx;
                 req_tx.send(req).await;
-                Self::request(handle.fd, iov).await?;
-                mem::drop(handle);
+                Self::request(&self.stream, iov).await?;
+                mem::drop(req_tx);
                 match rx.recv().await {
-                    Some(v) => v,
-                    None => {
+                    Ok(v) => v,
+                    Err(_) => {
                         error!("unable to receive reply for the request");
                         let e = self.err_rx.recv().await;
-                        return Err(msg.get_error(e));
+                        return Err(msg.get_error(e.ok()));
                     }
                 }
             }
             None => {
-                Self::request(handle.fd, iov).await?;
-                mem::drop(handle);
+                Self::request(&self.stream, iov).await?;
+                mem::drop(req_tx);
                 vec![]
             }
         };
         Ok(msg.construct_reply(result))
     }
+}
 
-    pub async fn close(&mut self) {
-        mem::drop(self.shutdown.take());
-        if let Some(handle) = self.deserializer.take() {
-            handle.await;
-        }
-    }
-
+impl<T> Domain<T> {
     pub fn get_uuid(&self) -> &[u8] {
         &self.uuid[..]
     }
@@ -705,6 +633,7 @@ impl From<nix::Error> for Error {
         }
     }
 }
+
 impl From<Error> for io::Error {
     fn from(e: Error) -> Self {
         use ErrorKind::*;

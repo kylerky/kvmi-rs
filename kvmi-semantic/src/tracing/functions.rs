@@ -3,14 +3,20 @@ use crate::memory::address_space::*;
 use crate::{Result, PTR_SZ};
 
 use std::convert::TryInto;
+use std::os::unix::io::AsRawFd;
 
 pub struct MSx64<'a> {
     regs: &'a kvm_regs,
     stack_args: Vec<u64>,
 }
+
 impl<'a> MSx64<'a> {
     const REGS_NUM: usize = 4;
-    pub async fn new(v_space: &IA32eVirtual, regs: &'a kvm_regs, num: usize) -> Result<MSx64<'a>> {
+    pub async fn new<T: AsRawFd>(
+        v_space: &IA32eVirtual<T>,
+        regs: &'a kvm_regs,
+        num: usize,
+    ) -> Result<MSx64<'a>> {
         if num > Self::REGS_NUM {
             let rsp = regs.rsp;
             let start_offset = ((Self::REGS_NUM + 1) * PTR_SZ) as u64;

@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use std::convert::TryInto;
 use std::future::Future;
 use std::mem;
+use std::os::unix::io::AsRawFd;
 
 use futures::future::FutureExt;
 use futures::select;
@@ -22,8 +23,8 @@ use kvmi::Event;
 const SYSTEM_PID: u64 = 4;
 
 pub(crate) type PSChanT = Result<u64>;
-pub(crate) async fn by_ps_init_sys(
-    v_space: &IA32eVirtual,
+pub(crate) async fn by_ps_init_sys<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     kernel_base_va: u64,
     profile: &RekallProfile,
     dtb_rva: u64,
@@ -36,13 +37,14 @@ pub(crate) async fn by_ps_init_sys(
     Ok(page_table_ptr & CR3_MASK)
 }
 
-pub(crate) async fn process_list_traversal<F, FR>(
-    v_space: IA32eVirtual,
+pub(crate) async fn process_list_traversal<F, FR, T>(
+    v_space: IA32eVirtual<T>,
     fut: F,
     head: u64,
     profile: &RekallProfile,
 ) -> Result<FR::Output>
 where
+    T: AsRawFd + Send + Sync,
     F: FnOnce(Receiver<PSChanT>) -> FR,
     FR: Future,
 {
@@ -56,16 +58,16 @@ where
     Ok(result)
 }
 
-pub async fn by_eprocess_list_traversal(
-    v_space: &IA32eVirtual,
+pub async fn by_eprocess_list_traversal<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     processes: Receiver<PSChanT>,
     profile: &RekallProfile,
     dtb_rva: u64,
 ) -> Result<u64> {
     let pid_rva = crate::get_struct_field_offset(profile, EPROCESS, "UniqueProcessId")?;
     // skip the list head
-    processes.recv().await;
-    while let Some(process) = processes.recv().await {
+    processes.recv().await.ok();
+    while let Ok(process) = processes.recv().await {
         let process = process?;
         match eprocess_validate(v_space, process, pid_rva, dtb_rva).await {
             Ok(dtb) => return Ok(dtb),
@@ -76,8 +78,8 @@ pub async fn by_eprocess_list_traversal(
     Err(Error::InvalidVAddr)
 }
 
-async fn eprocess_validate(
-    v_space: &IA32eVirtual,
+async fn eprocess_validate<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     process: IA32eAddrT,
     pid_rva: u64,
     dtb_rva: u64,
@@ -95,12 +97,15 @@ async fn eprocess_validate(
     Err(Error::InvalidVAddr)
 }
 
-pub fn get_process_list_from(
-    v_space: IA32eVirtual,
+pub fn get_process_list_from<T>(
+    v_space: IA32eVirtual<T>,
     head: u64,
     sd_rx: Receiver<()>,
     profile: &RekallProfile,
-) -> Result<(Receiver<PSChanT>, JoinHandle<()>)> {
+) -> Result<(Receiver<PSChanT>, JoinHandle<()>)>
+where
+    T: AsRawFd + Send + Sync,
+{
     let flink_rva = crate::get_struct_field_offset(profile, LIST_ENTRY, FLINK)?;
     let blink_rva = crate::get_struct_field_offset(profile, LIST_ENTRY, BLINK)?;
     let links_rva = crate::get_struct_field_offset(profile, EPROCESS, "ActiveProcessLinks")?;
@@ -118,8 +123,8 @@ pub fn get_process_list_from(
     Ok((rx, handle))
 }
 
-pub async fn traverse_process_list(
-    v_space: IA32eVirtual,
+pub async fn traverse_process_list<T: AsRawFd>(
+    v_space: IA32eVirtual<T>,
     head: u64,
     flink_rva: u64,
     blink_rva: u64,
@@ -160,8 +165,8 @@ pub async fn traverse_process_list(
     }
 }
 
-pub async fn get_current_process(
-    v_space: &IA32eVirtual,
+pub async fn get_current_process<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     event: &Event,
     profile: &RekallProfile,
 ) -> Result<IA32eAddrT> {
@@ -174,8 +179,8 @@ pub async fn get_current_process(
     Ok(process_ptr)
 }
 
-pub async fn get_current_thread(
-    v_space: &IA32eVirtual,
+pub async fn get_current_thread<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     event: &Event,
     profile: &RekallProfile,
 ) -> Result<IA32eAddrT> {

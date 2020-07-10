@@ -7,10 +7,12 @@ use crate::{Error, Result};
 
 use kvmi::message::{CommonEventReply, ControlSingleStep};
 
+use std::os::unix::io::AsRawFd;
+
 const BP_INSTRUCTION: u8 = 0xcc;
 
-pub(super) async fn resume_from_bp(
-    v_space: &IA32eVirtual,
+pub(super) async fn resume_from_bp<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     orig: u8,
     event: &Event,
     extra: &KvmiEventBreakpoint,
@@ -41,7 +43,10 @@ pub(super) async fn resume_from_bp(
     Ok(())
 }
 
-pub(super) async fn set_bp_by_physical(p_space: &KVMIPhysical, addr: PhysicalAddrT) -> Result<()> {
+pub(super) async fn set_bp_by_physical<T: AsRawFd>(
+    p_space: &KVMIPhysical<T>,
+    addr: PhysicalAddrT,
+) -> Result<()> {
     p_space.write(addr, vec![BP_INSTRUCTION]).await?;
     Ok(())
 }

@@ -18,6 +18,7 @@ use kvmi::message::{GetMaxGfn, GetRegistersReply};
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::ops::Range;
+use std::os::unix::io::AsRawFd;
 
 use async_std::sync::Arc;
 
@@ -31,8 +32,8 @@ pub(super) const CR3_MASK: u64 = (!0u64) << 12;
 
 const UNICODE_STRING_SZ: usize = 16;
 
-async fn read_kptr(
-    addr_space: &IA32eVirtual,
+async fn read_kptr<T: AsRawFd>(
+    addr_space: &IA32eVirtual<T>,
     symbol: &str,
     kernel_base_va: u64,
     profile: &RekallProfile,
@@ -43,11 +44,14 @@ async fn read_kptr(
     Ok(u64::from_ne_bytes(data[..].try_into().unwrap()))
 }
 
-pub(super) async fn get_system_page_table(
-    v_space: &mut IA32eVirtual,
+pub(super) async fn get_system_page_table<T>(
+    v_space: &mut IA32eVirtual<T>,
     kernel_base_va: u64,
     profile: &RekallProfile,
-) -> Result<bool> {
+) -> Result<bool>
+where
+    T: AsRawFd + Send + Sync,
+{
     let dtb_rva = crate::get_struct_field_offset(profile, KPROCESS, "DirectoryTableBase")?;
     let flink_rva = crate::get_struct_field_offset(profile, "_LIST_ENTRY", "Flink")?;
     let blink_rva = crate::get_struct_field_offset(profile, "_LIST_ENTRY", "Blink")?;
@@ -113,8 +117,8 @@ pub(super) async fn get_system_page_table(
 }
 
 #[allow(clippy::trivial_regex)]
-pub(super) async fn by_physical_mem_scan(
-    v_space: &IA32eVirtual,
+pub(super) async fn by_physical_mem_scan<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     profile: &RekallProfile,
     addr_range: Range<u64>,
     name_rva: u64,
@@ -195,8 +199,8 @@ pub(super) async fn by_physical_mem_scan(
     Err(Error::InvalidVAddr)
 }
 
-async fn verify_by_user_shared(
-    addr_space: &IA32eVirtual,
+async fn verify_by_user_shared<T: AsRawFd>(
+    addr_space: &IA32eVirtual<T>,
     major_rva: u64,
     minor_rva: u64,
 ) -> Result<bool> {
@@ -208,8 +212,8 @@ async fn verify_by_user_shared(
     }
 }
 
-async fn get_major_minor(
-    addr_space: &IA32eVirtual,
+async fn get_major_minor<T: AsRawFd>(
+    addr_space: &IA32eVirtual<T>,
     major_rva: u64,
     minor_rva: u64,
 ) -> Result<(u32, u32)> {
@@ -224,8 +228,8 @@ async fn get_major_minor(
     Ok((major, minor))
 }
 
-async fn verify_by_thread_list(
-    addr_space: &IA32eVirtual,
+async fn verify_by_thread_list<T: AsRawFd>(
+    addr_space: &IA32eVirtual<T>,
     flink: u64,
     flink_rva: u64,
     blink_rva: u64,
@@ -278,11 +282,11 @@ fn get_kernel_va_from(msrs: &HashMap<u32, u64>, profile: &RekallProfile) -> Resu
     Ok(va[0])
 }
 
-pub(super) async fn find_kernel_addr(
-    p_space: Arc<KVMIPhysical>,
+pub(super) async fn find_kernel_addr<T: AsRawFd>(
+    p_space: Arc<KVMIPhysical<T>>,
     reply: &GetRegistersReply,
     profile: &RekallProfile,
-) -> Result<(u64, u64, IA32eVirtual)> {
+) -> Result<(u64, u64, IA32eVirtual<T>)> {
     let msrs: HashMap<u32, u64> = reply
         .get_msrs()
         .iter()
@@ -311,7 +315,7 @@ pub(super) async fn find_kernel_addr(
     Ok((kernel_base_va, kernel_base_pa, v_space))
 }
 
-pub async fn read_utf8(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
+pub async fn read_utf8<T: AsRawFd>(v_space: &IA32eVirtual<T>, addr: IA32eAddrT) -> Result<String> {
     let str_struct = v_space.read(addr, UNICODE_STRING_SZ).await?;
 
     let length = u16::from_ne_bytes(str_struct[..2].try_into().unwrap());
@@ -323,7 +327,7 @@ pub async fn read_utf8(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<Strin
     Ok(res)
 }
 
-pub async fn read_utf16(v_space: &IA32eVirtual, addr: IA32eAddrT) -> Result<String> {
+pub async fn read_utf16<T: AsRawFd>(v_space: &IA32eVirtual<T>, addr: IA32eAddrT) -> Result<String> {
     let str_struct = v_space.read(addr, UNICODE_STRING_SZ).await?;
 
     let length = u16::from_ne_bytes(str_struct[..2].try_into().unwrap());

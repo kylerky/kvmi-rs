@@ -4,17 +4,19 @@ pub(super) mod tcp;
 use kvmi_semantic::address_space::*;
 use kvmi_semantic::event::*;
 use kvmi_semantic::memory;
-use kvmi_semantic::{Domain, Error, RekallProfile};
+use kvmi_semantic::{Error, RekallProfile};
 
 use crate::kvmi_capnp::event;
 
 use std::convert::TryInto;
+use std::os::unix::io::AsRawFd;
 use std::time::SystemTime;
 
 use super::BPHandler;
+use super::UnixDomain;
 
-async fn get_process_by(
-    v_space: &IA32eVirtual,
+async fn get_process_by<T: AsRawFd>(
+    v_space: &IA32eVirtual<T>,
     process: IA32eAddrT,
     profile: &RekallProfile,
 ) -> Result<(u64, u64, String), Error> {
@@ -41,7 +43,7 @@ async fn get_process_by(
 }
 
 async fn get_process(
-    dom: &mut Domain,
+    dom: &mut UnixDomain,
     event: &Event,
     _sregs: &kvm_sregs,
 ) -> Result<(IA32eAddrT, u64, u64, String), Error> {

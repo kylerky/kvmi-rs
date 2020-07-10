@@ -4,14 +4,18 @@ use crate::{Error, RekallProfile, Result};
 use crate::{FLINK, LIST_ENTRY, PTR_SZ};
 
 use std::convert::TryInto;
+use std::os::unix::io::AsRawFd;
 
 use async_std::prelude::*;
 
-pub async fn get_sys_module_list<'a, 'b>(
-    k_vspace: &'a IA32eVirtual,
+pub async fn get_sys_module_list<'a, 'b, T>(
+    k_vspace: &'a IA32eVirtual<T>,
     kernel_base: IA32eAddrT,
     profile: &'b RekallProfile,
-) -> Result<ForwardIter<'a>> {
+) -> Result<ForwardIter<'a, T>>
+where
+    T: AsRawFd + Send + Sync,
+{
     let head_ptr = profile.get_symbol_offset("PsLoadedModuleList")?;
     let flink_rva = profile.get_struct_field_offset(LIST_ENTRY, FLINK)?;
 
@@ -22,12 +26,15 @@ pub async fn get_sys_module_list<'a, 'b>(
     Ok(iter)
 }
 
-pub async fn find_module(
-    k_vspace: &IA32eVirtual,
+pub async fn find_module<T>(
+    k_vspace: &IA32eVirtual<T>,
     profile: &RekallProfile,
     kernel_base_va: IA32eAddrT,
     expect_name: &str,
-) -> Result<IA32eAddrT> {
+) -> Result<IA32eAddrT>
+where
+    T: AsRawFd + Send + Sync,
+{
     let name_rva = profile.get_struct_field_offset("_KLDR_DATA_TABLE_ENTRY", "BaseDllName")?;
     let base_rva = profile.get_struct_field_offset("_KLDR_DATA_TABLE_ENTRY", "DllBase")?;
 

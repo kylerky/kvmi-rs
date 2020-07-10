@@ -12,6 +12,7 @@ use async_std::sync::{Arc, Mutex, RwLock};
 
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::os::unix::io::AsRawFd;
 
 use kvmi::message::WritePhysical;
 
@@ -49,44 +50,25 @@ cfg_if! {
 #[allow(dead_code)]
 mod kvmi_physical {
     use super::*;
-    pub struct KVMIPhysical {
-        dom: Domain,
+    pub struct KVMIPhysical<T: 'static> {
+        dom: Domain<T>,
         cache: Mutex<PageCache>,
     }
 
-    impl AddressSpace for KVMIPhysical {
+    impl<T> AddressSpace for KVMIPhysical<T> {
         type AddrT = PhysicalAddrT;
     }
 
-    impl KVMIPhysical {
-        pub fn new(dom: Domain) -> Self {
+    impl<T> KVMIPhysical<T> {
+        pub fn new(dom: Domain<T>) -> Self {
             Self {
                 dom,
                 cache: Mutex::new(PageCache::new()),
             }
         }
 
-        pub fn get_dom(&self) -> &Domain {
+        pub fn get_dom(&self) -> &Domain<T> {
             &self.dom
-        }
-
-        pub async fn read(&self, addr: PhysicalAddrT, sz: usize) -> Result<Vec<u8>> {
-            let mut cache = self.cache.lock().await;
-            cache.read(&self.dom, addr, sz).await
-        }
-
-        pub async fn write(&self, addr: PhysicalAddrT, data: Vec<u8>) -> Result<()> {
-            Self::validate(addr, data.len())?;
-
-            self.evict(addr).await?;
-
-            self.dom.send(WritePhysical::new(addr, data)).await?;
-            Ok(())
-        }
-
-        pub async fn evict(&self, addr: PhysicalAddrT) -> Result<()> {
-            let mut cache = self.cache.lock().await;
-            cache.remove(&self.dom, addr).await
         }
 
         pub async fn flush(&self) -> Result<()> {
@@ -105,26 +87,46 @@ mod kvmi_physical {
         }
     }
 
-    impl From<Domain> for KVMIPhysical {
-        fn from(dom: Domain) -> Self {
+    impl<T: AsRawFd> KVMIPhysical<T> {
+        pub async fn read(&self, addr: PhysicalAddrT, sz: usize) -> Result<Vec<u8>> {
+            let mut cache = self.cache.lock().await;
+            cache.read(&self.dom, addr, sz).await
+        }
+
+        pub async fn write(&self, addr: PhysicalAddrT, data: Vec<u8>) -> Result<()> {
+            Self::validate(addr, data.len())?;
+
+            self.evict(addr).await?;
+
+            self.dom.send(WritePhysical::new(addr, data)).await?;
+            Ok(())
+        }
+
+        pub async fn evict(&self, addr: PhysicalAddrT) -> Result<()> {
+            let mut cache = self.cache.lock().await;
+            cache.remove(&self.dom, addr).await
+        }
+    }
+
+    impl<T: AsRawFd> From<Domain<T>> for KVMIPhysical<T> {
+        fn from(dom: Domain<T>) -> Self {
             Self::new(dom)
         }
     }
 }
 
-#[derive(Clone)]
-pub struct IA32eVirtual {
-    base: Arc<KVMIPhysical>,
+pub struct IA32eVirtual<T: 'static> {
+    base: Arc<KVMIPhysical<T>>,
     pub(crate) ptb: PhysicalAddrT,
     cache: Arc<RwLock<IA32eCache>>,
 }
 
-impl AddressSpace for IA32eVirtual {
+impl<T> AddressSpace for IA32eVirtual<T> {
     type AddrT = IA32eAddrT;
 }
 
-impl IA32eVirtual {
-    pub fn new(base: Arc<KVMIPhysical>, ptb: PhysicalAddrT) -> Self {
+impl<T> IA32eVirtual<T> {
+    pub fn new(base: Arc<KVMIPhysical<T>>, ptb: PhysicalAddrT) -> Self {
         Self {
             base,
             ptb,
@@ -140,20 +142,23 @@ impl IA32eVirtual {
         self.ptb
     }
 
-    pub fn get_base(&self) -> &Arc<KVMIPhysical> {
+    pub fn get_base(&self) -> &Arc<KVMIPhysical<T>> {
         &self.base
     }
 
-    pub async fn read(&self, v_addr: IA32eAddrT, sz: usize) -> Result<Vec<u8>> {
-        let p_addr = self.lookup(v_addr).await?;
-        self.base.read(p_addr, sz).await
+    pub fn is_canonical(v_addr: IA32eAddrT) -> bool {
+        match v_addr & CANON_MASK {
+            0 | CANON_MASK => true,
+            _ => false,
+        }
     }
 
-    pub async fn write(&self, v_addr: IA32eAddrT, data: Vec<u8>) -> Result<()> {
-        let p_addr = self.lookup(v_addr).await?;
-        self.base.write(p_addr, data).await
+    pub async fn flush(&self) {
+        self.cache.write().await.flush()
     }
+}
 
+impl<T: AsRawFd> IA32eVirtual<T> {
     pub async fn lookup(&self, v_addr: IA32eAddrT) -> Result<PhysicalAddrT> {
         if let Some((addr, level)) = self.cache.read().await.lookup(v_addr).await {
             let offset = level * 9 + 3;
@@ -171,15 +176,14 @@ impl IA32eVirtual {
         Ok(p_addr)
     }
 
-    pub fn is_canonical(v_addr: IA32eAddrT) -> bool {
-        match v_addr & CANON_MASK {
-            0 | CANON_MASK => true,
-            _ => false,
-        }
+    pub async fn write(&self, v_addr: IA32eAddrT, data: Vec<u8>) -> Result<()> {
+        let p_addr = self.lookup(v_addr).await?;
+        self.base.write(p_addr, data).await
     }
 
-    pub async fn flush(&self) {
-        self.cache.write().await.flush()
+    pub async fn read(&self, v_addr: IA32eAddrT, sz: usize) -> Result<Vec<u8>> {
+        let p_addr = self.lookup(v_addr).await?;
+        self.base.read(p_addr, sz).await
     }
 
     async fn translate_v2p(&self, v_addr: IA32eAddrT) -> Result<(PhysicalAddrT, u32)> {
@@ -219,6 +223,16 @@ impl IA32eVirtual {
             (entry & ENTRY_POINTER_MASK, pg, present)
         } else {
             (0, false, present)
+        }
+    }
+}
+
+impl<T> Clone for IA32eVirtual<T> {
+    fn clone(&self) -> Self {
+        Self {
+            base: Arc::clone(&self.base),
+            ptb: self.ptb,
+            cache: Arc::clone(&self.cache),
         }
     }
 }

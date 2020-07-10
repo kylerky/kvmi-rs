@@ -107,7 +107,7 @@ pub async fn subscribe(
 ) -> Result<(), io::Error> {
     let (rpc_system, client) = connect(addr)?;
 
-    let consumer = consumer::ToClient::new(Consumer { ch }).into_client::<capnp_rpc::Server>();
+    let consumer: consumer::Client<_> = capnp_rpc::new_client(Consumer { ch });
 
     let mut rpc_system = rpc_system.fuse();
     let mut subscribe = Box::pin(client.subscribe(consumer)).fuse();
