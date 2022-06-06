@@ -8,7 +8,7 @@ edition = "2018"
 bindgen = "0.54"
 
 [dependencies]
-nix = "0.17"
+nix = "0.20"
 exitcode = "1.1"
 log = "0.4"
 libc = "0.2"
